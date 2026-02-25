@@ -1,0 +1,12 @@
+{
+  "domain": "wattson",
+  "name": "Wattson",
+  "codeowners": ["@eyalmichon"],
+  "config_flow": true,
+  "documentation": "https://github.com/eyalmichon/ha-wattson",
+  "integration_type": "service",
+  "iot_class": "calculated",
+  "issue_tracker": "https://github.com/eyalmichon/ha-wattson/issues",
+  "requirements": [],
+  "version": "v0.0.0"
+}

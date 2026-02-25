@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+
+set -e
+
+cd "$(dirname "$0")/.."
+
+echo "Installing Python requirements..."
+sudo uv pip install --system ".[dev]"
+
+echo "Installing pre-commit hooks..."
+pre-commit install
+
+echo "Setup complete!"

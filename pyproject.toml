@@ -1,0 +1,55 @@
+[project]
+name = "ha-wattson"
+dynamic = ["version"]
+requires-python = ">=3.13"
+dependencies = [
+    "homeassistant",
+]
+
+[tool.setuptools]
+packages = []
+
+[project.optional-dependencies]
+dev = [
+    "colorlog",
+    "fastmcp",
+    "hassil",
+    "home-assistant-frontend",
+    "pre-commit",
+    "ruff",
+    "pytest",
+    "pytest-homeassistant-custom-component",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    "D",       # docstrings -- not enforced yet
+    "E501",    # line length -- handled by formatter
+    "PLR0913", # too many arguments
+    "TRY003",  # long exception messages
+    "COM812",  # trailing comma -- conflicts with formatter
+    "ISC001",  # implicit string concat -- conflicts with formatter
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "PLR2004", "ANN", "ARG001"]
+"scripts/**" = [
+    "S603",    # subprocess calls are intentional in dev tooling
+    "S607",    # partial executable paths are fine for dev scripts
+    "S108",    # /tmp usage is fine for dev tooling
+    "C901",    # complexity limits relaxed for tool registration functions
+    "PLR0915", # statement limits relaxed for tool registration functions
+    "FBT001",  # boolean positional args in tool signatures
+    "FBT002",  # boolean default values in tool signatures
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["custom_components.wattson"]

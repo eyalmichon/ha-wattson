@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+
+set -e
+
+cd "$(dirname "$0")/.."
+
+# Create HA config dir if not present
+if [[ ! -d "${PWD}/.dev/ha" ]]; then
+    mkdir -p "${PWD}/.dev/ha"
+    echo "Creating initial Home Assistant config..."
+    hass --config "${PWD}/.dev/ha" --script ensure_config
+fi
+
+# Symlink custom_components into the HA config dir so HA discovers it natively.
+if [[ ! -e "${PWD}/.dev/ha/custom_components" ]]; then
+    ln -sf "${PWD}/custom_components" "${PWD}/.dev/ha/custom_components"
+fi
+
+echo "Starting Home Assistant..."
+echo "Access at: http://localhost:8123"
+echo ""
+
+# Start Home Assistant (pass --debug to enable verbose logging)
+if [[ "${DEBUG}" == "1" || "${1}" == "--debug" ]]; then
+    echo "Debug mode enabled."
+    hass --config "${PWD}/.dev/ha" --debug
+else
+    hass --config "${PWD}/.dev/ha"
+fi

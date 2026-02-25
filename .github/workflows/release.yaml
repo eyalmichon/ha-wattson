@@ -1,0 +1,33 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  manifest_bump:
+    name: manifest_bump
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@v4
+
+      - name: Get version
+        uses: home-assistant/actions/helpers/version@master
+        id: version
+
+      - name: Bump manifest and create zip
+        run: |
+          sed -i 's/v0.0.0/${{ steps.version.outputs.version }}/' custom_components/wattson/manifest.json
+          cd custom_components/wattson/
+          zip ../../wattson.zip -r ./
+
+      - name: Upload the release
+        uses: svenstaro/upload-release-action@master
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: ./wattson.zip
+          asset_name: wattson.zip
+          tag: ${{ github.ref }}
+          overwrite: true

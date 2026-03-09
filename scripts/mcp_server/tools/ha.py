@@ -38,14 +38,29 @@ def register(mcp) -> None:  # noqa: ANN001
         if pids:
             try:
                 result = subprocess.run(
-                    ["/usr/bin/curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", f"{HA_URL}/"],
-                    capture_output=True, text=True, timeout=5,
+                    [
+                        "/usr/bin/curl",
+                        "-s",
+                        "-o",
+                        "/dev/null",
+                        "-w",
+                        "%{http_code}",
+                        f"{HA_URL}/",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
                     check=False,
                 )
                 http_ok = result.stdout.strip() == str(_HTTP_OK)
             except (OSError, subprocess.TimeoutExpired):
                 pass
-        return {"running": len(pids) > 0, "pids": pids, "http_responding": http_ok, "url": HA_URL}
+        return {
+            "running": len(pids) > 0,
+            "pids": pids,
+            "http_responding": http_ok,
+            "url": HA_URL,
+        }
 
     @mcp.tool
     def ha_restart(wait: bool = True, timeout_seconds: int = 60) -> dict[str, Any]:
@@ -80,16 +95,33 @@ def register(mcp) -> None:  # noqa: ANN001
             time.sleep(5)
             try:
                 result = subprocess.run(
-                    ["/usr/bin/curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", f"{HA_URL}/"],
-                    capture_output=True, text=True, timeout=5,
+                    [
+                        "/usr/bin/curl",
+                        "-s",
+                        "-o",
+                        "/dev/null",
+                        "-w",
+                        "%{http_code}",
+                        f"{HA_URL}/",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
                     check=False,
                 )
                 if result.stdout.strip() == str(_HTTP_OK):
-                    return {"status": "ready", "elapsed_seconds": int(time.time() - start), "url": HA_URL}
+                    return {
+                        "status": "ready",
+                        "elapsed_seconds": int(time.time() - start),
+                        "url": HA_URL,
+                    }
             except (OSError, subprocess.TimeoutExpired):
                 continue
 
-        return {"status": "timeout", "message": f"HA not ready after {timeout_seconds}s"}
+        return {
+            "status": "timeout",
+            "message": f"HA not ready after {timeout_seconds}s",
+        }
 
     @mcp.tool
     def ha_logs(lines: int = 30, filter_text: str | None = None) -> str:
@@ -106,7 +138,9 @@ def register(mcp) -> None:  # noqa: ANN001
             return "Log file not found. Is HA configured?"
 
         if filter_text:
-            all_lines = [line for line in all_lines if filter_text.lower() in line.lower()]
+            all_lines = [
+                line for line in all_lines if filter_text.lower() in line.lower()
+            ]
 
         return "".join(all_lines[-lines:])
 
@@ -161,7 +195,9 @@ def register(mcp) -> None:  # noqa: ANN001
         """
         if not re.match(r"^[a-z_]+$", domain) or not re.match(r"^[a-z_]+$", service):
             return {"error": f"Invalid domain/service format: {domain}/{service}"}
-        return await api_request("POST", f"/api/services/{domain}/{service}", data or {})
+        return await api_request(
+            "POST", f"/api/services/{domain}/{service}", data or {}
+        )
 
     @mcp.tool
     async def ha_integration_status(domain: str = _DOMAIN) -> dict[str, Any]:
@@ -175,7 +211,9 @@ def register(mcp) -> None:  # noqa: ANN001
             return result
 
         manifest_version = None
-        manifest_path = Path(PROJECT_ROOT) / "custom_components" / domain / "manifest.json"
+        manifest_path = (
+            Path(PROJECT_ROOT) / "custom_components" / domain / "manifest.json"
+        )
         with contextlib.suppress(FileNotFoundError, json.JSONDecodeError, KeyError):
             manifest_version = json.loads(manifest_path.read_text())["version"]
 
@@ -184,12 +222,15 @@ def register(mcp) -> None:  # noqa: ANN001
                 "entry_id": e["entry_id"],
                 "state": e["state"],
                 "options": e.get("options", {}),
-                "integration_version": manifest_version or f"{e.get('version')}.{e.get('minor_version')}",
+                "integration_version": manifest_version
+                or f"{e.get('version')}.{e.get('minor_version')}",
             }
             for e in result["body"]
             if e.get("domain") == domain
         ]
-        return {"entries": entries} if entries else {"error": f"No {domain} entries found"}
+        return (
+            {"entries": entries} if entries else {"error": f"No {domain} entries found"}
+        )
 
     @mcp.tool
     async def ha_reload_integration(domain: str = _DOMAIN) -> dict[str, Any]:

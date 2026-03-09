@@ -29,14 +29,29 @@ def register(mcp) -> None:  # noqa: ANN001
 
         try:
             result = subprocess.run(
-                ["mosquitto_pub", "-h", MQTT_HOST, "-p", str(MQTT_PORT), "-t", topic, "-m", payload],
-                capture_output=True, text=True, timeout=5,
+                [
+                    "mosquitto_pub",
+                    "-h",
+                    MQTT_HOST,
+                    "-p",
+                    str(MQTT_PORT),
+                    "-t",
+                    topic,
+                    "-m",
+                    payload,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=5,
                 check=False,
             )
             if result.returncode == 0:
                 return {"status": "published", "topic": topic}
         except FileNotFoundError:
-            return {"status": "error", "message": "mosquitto_pub not found. Install mosquitto-clients."}
+            return {
+                "status": "error",
+                "message": "mosquitto_pub not found. Install mosquitto-clients.",
+            }
         except (OSError, subprocess.TimeoutExpired) as e:
             return {"status": "error", "message": str(e)}
         else:
@@ -52,7 +67,8 @@ def register(mcp) -> None:  # noqa: ANN001
         try:
             result = subprocess.run(
                 ["pgrep", "mosquitto"],
-                capture_output=True, text=True,
+                capture_output=True,
+                text=True,
                 check=False,
             )
             if result.returncode == 0:
@@ -73,7 +89,8 @@ def register(mcp) -> None:  # noqa: ANN001
         try:
             result = subprocess.run(
                 ["pgrep", "mosquitto"],
-                capture_output=True, text=True,
+                capture_output=True,
+                text=True,
                 check=False,
             )
             if result.returncode == 0:

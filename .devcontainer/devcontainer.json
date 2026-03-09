@@ -3,6 +3,7 @@
   "image": "mcr.microsoft.com/devcontainers/python:3.13",
   "runArgs": ["--name", "ha-wattson"],
   "postCreateCommand": "scripts/setup",
+  "postStartCommand": "scripts/develop",
   "forwardPorts": [8123],
   "portsAttributes": {
     "8123": {

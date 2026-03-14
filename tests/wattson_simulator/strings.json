@@ -1,0 +1,13 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Add Simulated Appliance",
+        "description": "Create a simulated power sensor for testing Wattson.",
+        "data": {
+          "name": "Appliance name"
+        }
+      }
+    }
+  }
+}

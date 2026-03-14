@@ -1,0 +1,45 @@
+list_profiles:
+  name: List Profiles
+  description: List all learned power profiles for a Wattson appliance.
+  fields:
+    config_entry_id:
+      name: Appliance
+      description: The Wattson config entry to query.
+      required: true
+      selector:
+        config_entry:
+          integration: wattson
+
+rename_profile:
+  name: Rename Profile
+  description: Rename the currently selected profile in the profile selector.
+  fields:
+    entity_id:
+      name: Profile Selector
+      description: The Wattson profile selector entity.
+      required: true
+      selector:
+        entity:
+          filter:
+            - integration: wattson
+              domain: select
+    name:
+      name: New Name
+      description: Human-readable name for this profile (e.g. "Normal Dry").
+      required: true
+      selector:
+        text:
+
+delete_profile:
+  name: Delete Profile
+  description: Delete the currently selected profile from the profile selector.
+  fields:
+    entity_id:
+      name: Profile Selector
+      description: The Wattson profile selector entity.
+      required: true
+      selector:
+        entity:
+          filter:
+            - integration: wattson
+              domain: select

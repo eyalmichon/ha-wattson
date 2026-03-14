@@ -138,3 +138,6 @@ cython_debug/
 .dev/
 .plans/
 .storage/
+
+# Simulator is a dev-only component; source lives in tests/wattson_simulator/.
+custom_components/wattson_simulator

@@ -18,13 +18,13 @@ from pytest_homeassistant_custom_component.common import (
 from custom_components.wattson.const import (
     CONF_ENTITY_ID,
     CONF_OFF_THRESHOLD,
-    CONF_PAUSE_THRESHOLD,
     CONF_SOURCE_TYPE,
     CONF_START_THRESHOLD,
     SOURCE_ENTITY,
 )
 from custom_components.wattson.const import DOMAIN as WATTSON_DOMAIN
 from custom_components.wattson_simulator.const import DOMAIN as SIM_DOMAIN
+from custom_components.wattson_simulator.const import PROGRAMS
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -79,8 +79,6 @@ class E2EContext:
 
     async def run_full_cycle(self, program_key: str) -> None:
         """Select a program, start the simulator, advance through the full cycle + end delay."""
-        from custom_components.wattson_simulator.const import PROGRAMS
-
         self.engine.set_program(program_key)
         self.engine.start()
         await self.hass.async_block_till_done()
@@ -172,7 +170,7 @@ async def test_full_cycle_creates_profile(e2e: E2EContext) -> None:
 
     program_state = hass.states.get("sensor.dryer_program")
     assert program_state is not None
-    assert program_state.state == "Pattern #1"
+    assert program_state.state == "Program #1"
 
     profile_select = hass.states.get("select.dryer_profile")
     assert profile_select is not None
@@ -345,7 +343,7 @@ async def test_delete_profile_via_button(e2e: E2EContext) -> None:
     await hass.services.async_call(
         "button",
         "press",
-        {"entity_id": "button.dryer_delete_profile"},
+        {"entity_id": "button.dryer_profile_delete"},
         blocking=True,
     )
     await hass.async_block_till_done()
@@ -484,8 +482,8 @@ async def test_options_flow_changes_thresholds(e2e: E2EContext) -> None:
         result["flow_id"],
         user_input={
             CONF_START_THRESHOLD: 5000.0,
-            CONF_PAUSE_THRESHOLD: 2.0,
             CONF_OFF_THRESHOLD: 1.0,
+            "end_delay": 0,
         },
     )
     assert result["type"] == "create_entry"
@@ -542,3 +540,143 @@ async def test_unload_and_reload(e2e: E2EContext) -> None:
     state = hass.states.get("sensor.dryer_state")
     assert state is not None
     assert state.state == "off"
+
+
+# ---------------------------------------------------------------------------
+# 16. Full cycle detects phases
+# ---------------------------------------------------------------------------
+
+
+async def test_full_cycle_detects_phases(e2e: E2EContext) -> None:
+    """A completed cycle with distinct power levels should detect phases."""
+    await e2e.run_full_cycle("normal_dry")
+
+    profile = e2e.coordinator.store.profiles[0]
+    assert profile.phases is not None
+    assert len(profile.phases) >= 2
+
+    first_phase = profile.phases[0]
+    assert first_phase.start_pct == 0.0
+    last_phase = profile.phases[-1]
+    assert last_phase.end_pct > 0.0
+
+
+# ---------------------------------------------------------------------------
+# 17. Anti-wrinkle cycle detects intermittent phase
+# ---------------------------------------------------------------------------
+
+
+async def test_anti_wrinkle_detects_intermittent_phase(e2e: E2EContext) -> None:
+    """The anti-wrinkle program should produce an intermittent phase at the end."""
+    await e2e.run_full_cycle("anti_wrinkle_test")
+
+    profile = e2e.coordinator.store.profiles[0]
+    assert profile.phases is not None
+    assert len(profile.phases) >= 2
+
+    last = profile.phases[-1]
+    assert last.avg_power_w < 100.0
+
+
+# ---------------------------------------------------------------------------
+# 18. Phase sensor entity exists and shows None when off
+# ---------------------------------------------------------------------------
+
+
+async def test_phase_sensor_entity_exists(e2e: E2EContext) -> None:
+    """Phase sensor exists and is None when no cycle is running."""
+    hass = e2e.hass
+    state = hass.states.get("sensor.dryer_phase")
+    assert state is not None
+    assert state.state in ("unknown", "unavailable", "None")
+
+
+# ---------------------------------------------------------------------------
+# 19. Phase select and phase name entities exist
+# ---------------------------------------------------------------------------
+
+
+async def test_phase_select_exists(e2e: E2EContext) -> None:
+    """Phase select entity exists (may have no options if no profiles yet)."""
+    hass = e2e.hass
+    state = hass.states.get("select.dryer_profile_phase")
+    assert state is not None
+
+
+# ---------------------------------------------------------------------------
+# 20. Rename phase via text entity
+# ---------------------------------------------------------------------------
+
+
+async def test_rename_phase_via_text_entity(e2e: E2EContext) -> None:
+    """Editing the phase name text entity renames the selected phase."""
+    hass = e2e.hass
+    await e2e.run_full_cycle("normal_dry")
+
+    profile = e2e.coordinator.store.profiles[0]
+    assert profile.phases is not None
+    assert len(profile.phases) >= 2
+
+    phase_select_state = hass.states.get("select.dryer_profile_phase")
+    assert phase_select_state is not None
+    options = phase_select_state.attributes.get("options", [])
+    assert len(options) >= 2
+
+    await hass.services.async_call(
+        "select",
+        "select_option",
+        {"entity_id": "select.dryer_profile_phase", "option": options[0]},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    await hass.services.async_call(
+        "text",
+        "set_value",
+        {"entity_id": "text.dryer_profile_phase_name", "value": "Heating"},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    updated_profile = e2e.coordinator.store.profiles[0]
+    assert updated_profile.phases[0].name == "Heating"
+
+
+# ---------------------------------------------------------------------------
+# 21. Mark phase as cycle done via switch
+# ---------------------------------------------------------------------------
+
+
+async def test_mark_phase_done_via_switch(e2e: E2EContext) -> None:
+    """Toggling the phase-done switch marks the phase."""
+    hass = e2e.hass
+    await e2e.run_full_cycle("normal_dry")
+
+    profile = e2e.coordinator.store.profiles[0]
+    assert profile.phases is not None
+
+    phase_select_state = hass.states.get("select.dryer_profile_phase")
+    options = phase_select_state.attributes.get("options", [])
+
+    # Select the last phase.
+    await hass.services.async_call(
+        "select",
+        "select_option",
+        {"entity_id": "select.dryer_profile_phase", "option": options[-1]},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    await hass.services.async_call(
+        "switch",
+        "turn_on",
+        {"entity_id": "switch.dryer_profile_phase_done"},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    updated_profile = e2e.coordinator.store.profiles[0]
+    assert updated_profile.phases[-1].marks_cycle_done is True
+
+    switch_state = hass.states.get("switch.dryer_profile_phase_done")
+    assert switch_state.state == "on"

@@ -13,10 +13,13 @@ if [[ ! -f "${HA_CONFIG}/.HA_VERSION" ]]; then
     hass --config "${HA_CONFIG}" --script ensure_config
 fi
 
-# Create custom_components dir and symlink only our integration.
+# Create custom_components dir and symlink our integrations.
 mkdir -p "${HA_CONFIG}/custom_components"
 if [[ ! -e "${HA_CONFIG}/custom_components/wattson" ]]; then
     ln -sf "${PWD}/custom_components/wattson" "${HA_CONFIG}/custom_components/wattson"
+fi
+if [[ ! -e "${HA_CONFIG}/custom_components/wattson_simulator" ]]; then
+    ln -sf "${PWD}/tests/wattson_simulator" "${HA_CONFIG}/custom_components/wattson_simulator"
 fi
 
 # Create default dev user and skip onboarding wizard on first run.

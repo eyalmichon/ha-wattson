@@ -174,7 +174,7 @@ class TestEmptyProfileEntities:
         await hass.services.async_call(
             "button",
             "press",
-            {"entity_id": "button.test_delete_profile"},
+            {"entity_id": "button.test_profile_delete"},
             blocking=True,
         )
         _, coordinator = wattson_setup
@@ -393,7 +393,7 @@ class TestProfileMatcherBoundaries:
             cycle_count=1,
             last_updated=0.0,
         )
-        remaining, corr, progress = matcher.estimate_remaining(
+        remaining, _corr, _progress = matcher.estimate_remaining(
             [(0.0, 100.0), (1.0, 100.0)], profile
         )
         assert remaining is None

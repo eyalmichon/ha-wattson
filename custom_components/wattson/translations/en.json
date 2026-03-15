@@ -1,1 +1,74 @@
-../strings.json
+{
+  "entity": {
+    "select": {
+      "profile": {
+        "name": "Profile"
+      },
+      "phase": {
+        "name": "Profile Phase"
+      }
+    },
+    "text": {
+      "profile_name": {
+        "name": "Profile Name"
+      },
+      "phase_name": {
+        "name": "Profile Phase Name"
+      }
+    },
+    "button": {
+      "delete_profile": {
+        "name": "Profile Delete"
+      }
+    },
+    "switch": {
+      "phase_done": {
+        "name": "Profile Phase Done"
+      }
+    }
+  },
+  "config": {
+    "step": {
+      "user": {
+        "title": "Add Appliance",
+        "description": "Set up Wattson to monitor an appliance's power consumption.",
+        "data": {
+          "name": "Appliance Name",
+          "source_type": "Power Source Type"
+        }
+      },
+      "source_entity": {
+        "title": "Power Source",
+        "description": "Select the power sensor entity to monitor.",
+        "data": {
+          "entity_id": "Power Sensor Entity",
+          "start_threshold": "Start Threshold (W)"
+        }
+      },
+      "source_mqtt": {
+        "title": "MQTT Power Source",
+        "description": "Enter the MQTT topic that publishes power readings.",
+        "data": {
+          "mqtt_topic": "MQTT Topic",
+          "start_threshold": "Start Threshold (W)"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "This power source is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Wattson Options",
+        "description": "Adjust detection thresholds. End Delay controls how long to wait at zero power before declaring a cycle finished — set to 0 for automatic (recommended).",
+        "data": {
+          "start_threshold": "Start Threshold (W)",
+          "off_threshold": "Off Threshold (W)",
+          "end_delay": "End Delay (s)"
+        }
+      }
+    }
+  }
+}

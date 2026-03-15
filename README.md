@@ -1,10 +1,14 @@
-# Wattson
+<p align="center">
+  <img src="custom_components/wattson/brand/logo@2x.png" alt="Wattson logo" width="256">
+</p>
 
-[![hacs][hacsbadge]][hacs]
-[![release][releasebadge]][release]
-[![lint][lintbadge]][lint]
+<p align="center">
+  <a href="https://github.com/hacs/integration"><img src="https://img.shields.io/badge/HACS-Custom-orange.svg" alt="HACS"></a>
+  <a href="https://github.com/eyalmichon/ha-wattson/releases"><img src="https://img.shields.io/github/v/release/eyalmichon/ha-wattson" alt="Release"></a>
+  <a href="https://github.com/eyalmichon/ha-wattson/actions/workflows/lint.yaml"><img src="https://github.com/eyalmichon/ha-wattson/actions/workflows/lint.yaml/badge.svg" alt="Lint"></a>
+</p>
 
-Home Assistant integration that learns your appliances' power patterns to detect cycles and estimate time remaining.
+Home Assistant integration that learns your appliances' power patterns to detect cycles, track phases, and estimate time remaining.
 
 ## Installation
 
@@ -40,9 +44,3 @@ scripts/develop
 pytest
 ```
 
-[hacs]: https://github.com/hacs/integration
-[hacsbadge]: https://img.shields.io/badge/HACS-Custom-orange.svg
-[release]: https://github.com/eyalmichon/ha-wattson/releases
-[releasebadge]: https://img.shields.io/github/v/release/eyalmichon/ha-wattson
-[lint]: https://github.com/eyalmichon/ha-wattson/actions/workflows/lint.yaml
-[lintbadge]: https://github.com/eyalmichon/ha-wattson/actions/workflows/lint.yaml/badge.svg

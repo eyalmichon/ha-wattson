@@ -1,5 +1,5 @@
 # Changes here will be overwritten by Copier; DO NOT EDIT MANUALLY
-_commit: v0.5.0
+_commit: v0.5.1
 _src_path: gh:eyalmichon/ha-integration-template
 description: Home Assistant integration that learns your appliances' power patterns
     to detect cycles and estimate time remaining.

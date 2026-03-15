@@ -19,7 +19,9 @@ jobs:
 
       - name: Bump manifest and create zip
         run: |
-          sed -i 's/v0.0.0/${{ steps.version.outputs.version }}/' custom_components/wattson/manifest.json
+          version="${{ steps.version.outputs.version }}"
+          version="${version#v}"
+          sed -i "s/0.0.0/${version}/" custom_components/wattson/manifest.json
           cd custom_components/wattson/
           zip ../../wattson.zip -r ./
 

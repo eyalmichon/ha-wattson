@@ -119,7 +119,7 @@ class WattsonCoordinator:
 
     def get_profile_select(self) -> WattsonProfileSelect | None:
         """Return the profile select entity, if registered."""
-        from .select import WattsonProfileSelect
+        from .select import WattsonProfileSelect  # noqa: PLC0415
 
         for entity in self._entities:
             if isinstance(entity, WattsonProfileSelect):
@@ -128,7 +128,7 @@ class WattsonCoordinator:
 
     def get_phase_select(self) -> WattsonPhaseSelect | None:
         """Return the phase select entity, if registered."""
-        from .select import WattsonPhaseSelect
+        from .select import WattsonPhaseSelect  # noqa: PLC0415
 
         for entity in self._entities:
             if isinstance(entity, WattsonPhaseSelect):
@@ -243,7 +243,7 @@ class WattsonCoordinator:
             return
 
         try:
-            from homeassistant.components.mqtt import async_subscribe
+            from homeassistant.components.mqtt import async_subscribe  # noqa: PLC0415
 
             self._unsub_mqtt = await async_subscribe(
                 self.hass, topic, self._handle_mqtt_message

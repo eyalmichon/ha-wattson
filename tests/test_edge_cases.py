@@ -17,7 +17,9 @@ from custom_components.wattson.const import (
     MAX_STORED_CYCLES,
     SOURCE_ENTITY,
 )
-from custom_components.wattson.const import DOMAIN as WATTSON_DOMAIN
+from custom_components.wattson.const import (
+    DOMAIN as WATTSON_DOMAIN,
+)
 from custom_components.wattson.cycle_recorder import CycleData, CycleRecorder
 from custom_components.wattson.profile_matcher import Profile, ProfileMatcher
 from custom_components.wattson.store import WattsonStore

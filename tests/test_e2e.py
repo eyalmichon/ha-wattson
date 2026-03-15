@@ -22,7 +22,9 @@ from custom_components.wattson.const import (
     CONF_START_THRESHOLD,
     SOURCE_ENTITY,
 )
-from custom_components.wattson.const import DOMAIN as WATTSON_DOMAIN
+from custom_components.wattson.const import (
+    DOMAIN as WATTSON_DOMAIN,
+)
 from custom_components.wattson_simulator.const import DOMAIN as SIM_DOMAIN
 from custom_components.wattson_simulator.const import PROGRAMS
 

@@ -117,23 +117,24 @@ class WattsonCoordinator:
         """Register an entity to be updated on state changes."""
         self._entities.append(entity)
 
+    def _get_entity_by_type(self, entity_type: type[Entity]) -> Entity | None:
+        """Return the first registered entity of the given type, or None."""
+        for entity in self._entities:
+            if isinstance(entity, entity_type):
+                return entity
+        return None
+
     def get_profile_select(self) -> WattsonProfileSelect | None:
         """Return the profile select entity, if registered."""
         from .select import WattsonProfileSelect  # noqa: PLC0415
 
-        for entity in self._entities:
-            if isinstance(entity, WattsonProfileSelect):
-                return entity
-        return None
+        return self._get_entity_by_type(WattsonProfileSelect)  # type: ignore[return-value]
 
     def get_phase_select(self) -> WattsonPhaseSelect | None:
         """Return the phase select entity, if registered."""
         from .select import WattsonPhaseSelect  # noqa: PLC0415
 
-        for entity in self._entities:
-            if isinstance(entity, WattsonPhaseSelect):
-                return entity
-        return None
+        return self._get_entity_by_type(WattsonPhaseSelect)  # type: ignore[return-value]
 
     def refresh_profile_selects(self) -> None:
         """Rebuild options on profile select entities after profile changes."""

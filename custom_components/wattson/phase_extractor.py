@@ -20,6 +20,7 @@ from .const import (
     PHASE_PENALTY_FACTOR,
     PHASE_PRE_SMOOTH_WINDOW_S,
 )
+from .energy import samples_to_arrays
 from .profile_matcher import ProfilePhase
 
 
@@ -49,8 +50,7 @@ def extract_phases(
     if len(samples) < MIN_SAMPLES:
         return []
 
-    times = np.array([s[0] for s in samples])
-    powers = np.array([s[1] for s in samples])
+    times, powers = samples_to_arrays(samples)
 
     total_duration = times[-1] - times[0]
     if total_duration <= 0:

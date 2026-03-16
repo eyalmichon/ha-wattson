@@ -18,6 +18,8 @@ if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
     from homeassistant.core import HomeAssistant
 
+    from .profile_matcher import Profile
+
 _LOGGER = logging.getLogger(__name__)
 
 SERVICE_LIST_PROFILES = "list_profiles"
@@ -95,6 +97,25 @@ def _resolve_profile_select(
     return coordinator, profile_id
 
 
+def _resolve_profile(
+    hass: HomeAssistant, entity_id: str
+) -> tuple[WattsonCoordinator, str, Profile]:
+    """Resolve entity_id to (coordinator, profile_id, profile). Raises on failure."""
+    coordinator, profile_id = _resolve_profile_select(hass, entity_id)
+    profile = coordinator.store.get_profile(profile_id)
+    if profile is None:
+        msg = f"Profile {profile_id} not found"
+        raise ServiceValidationError(msg)
+    return coordinator, profile_id, profile
+
+
+def _validate_phase_index(profile: Profile, phase_index: int) -> None:
+    """Raise if phase_index is out of bounds for the profile."""
+    if not profile.phases or phase_index >= len(profile.phases):
+        msg = f"Phase index {phase_index} out of range"
+        raise ServiceValidationError(msg)
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Wattson from a config entry."""
     store = WattsonStore(hass, entry.entry_id)
@@ -135,7 +156,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return unload_ok
 
 
-def _register_services(hass: HomeAssistant) -> None:  # noqa: C901
+def _register_services(hass: HomeAssistant) -> None:
     """Register Wattson domain services."""
 
     async def handle_list_profiles(call: ServiceCall) -> ServiceResponse:
@@ -146,63 +167,33 @@ def _register_services(hass: HomeAssistant) -> None:  # noqa: C901
         }
 
     async def handle_rename_profile(call: ServiceCall) -> None:
-        coordinator, profile_id = _resolve_profile_select(
-            hass, call.data[ATTR_ENTITY_ID]
-        )
+        coordinator, profile_id, _ = _resolve_profile(hass, call.data[ATTR_ENTITY_ID])
         name = call.data[ATTR_NAME]
-
-        if coordinator.store.get_profile(profile_id) is None:
-            msg = f"Profile {profile_id} not found"
-            raise ServiceValidationError(msg)
-
         await coordinator.async_rename_profile(profile_id, name)
         _LOGGER.debug("Renamed profile %s to '%s'", profile_id, name)
 
     async def handle_delete_profile(call: ServiceCall) -> None:
-        coordinator, profile_id = _resolve_profile_select(
-            hass, call.data[ATTR_ENTITY_ID]
-        )
-
-        if coordinator.store.get_profile(profile_id) is None:
-            msg = f"Profile {profile_id} not found"
-            raise ServiceValidationError(msg)
-
+        coordinator, profile_id, _ = _resolve_profile(hass, call.data[ATTR_ENTITY_ID])
         await coordinator.async_delete_profile(profile_id)
         _LOGGER.debug("Deleted profile %s", profile_id)
 
     async def handle_rename_phase(call: ServiceCall) -> None:
-        coordinator, profile_id = _resolve_profile_select(
+        coordinator, profile_id, profile = _resolve_profile(
             hass, call.data[ATTR_ENTITY_ID]
         )
         phase_index = call.data[ATTR_PHASE_INDEX]
+        _validate_phase_index(profile, phase_index)
         name = call.data[ATTR_NAME]
-
-        profile = coordinator.store.get_profile(profile_id)
-        if profile is None:
-            msg = f"Profile {profile_id} not found"
-            raise ServiceValidationError(msg)
-        if not profile.phases or phase_index >= len(profile.phases):
-            msg = f"Phase index {phase_index} out of range"
-            raise ServiceValidationError(msg)
-
         await coordinator.async_rename_phase(profile_id, phase_index, name)
         _LOGGER.debug("Renamed phase %d of %s to '%s'", phase_index, profile_id, name)
 
     async def handle_set_phase_done(call: ServiceCall) -> None:
-        coordinator, profile_id = _resolve_profile_select(
+        coordinator, profile_id, profile = _resolve_profile(
             hass, call.data[ATTR_ENTITY_ID]
         )
         phase_index = call.data[ATTR_PHASE_INDEX]
+        _validate_phase_index(profile, phase_index)
         done = call.data[ATTR_DONE]
-
-        profile = coordinator.store.get_profile(profile_id)
-        if profile is None:
-            msg = f"Profile {profile_id} not found"
-            raise ServiceValidationError(msg)
-        if not profile.phases or phase_index >= len(profile.phases):
-            msg = f"Phase index {phase_index} out of range"
-            raise ServiceValidationError(msg)
-
         await coordinator.async_set_phase_done(profile_id, phase_index, done=done)
         _LOGGER.debug("Set phase %d done=%s for %s", phase_index, done, profile_id)
 

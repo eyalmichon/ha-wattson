@@ -2,152 +2,35 @@
 
 from __future__ import annotations
 
-import random
-from datetime import timedelta
 from typing import TYPE_CHECKING
-from unittest.mock import patch
 
 import pytest
-from homeassistant.setup import async_setup_component
-from homeassistant.util import dt as dt_util
-from pytest_homeassistant_custom_component.common import (
-    MockConfigEntry,
-    async_fire_time_changed,
-)
 
 from custom_components.wattson.const import (
-    CONF_ENTITY_ID,
     CONF_OFF_THRESHOLD,
-    CONF_SOURCE_TYPE,
     CONF_START_THRESHOLD,
-    SOURCE_ENTITY,
 )
-from custom_components.wattson.const import (
-    DOMAIN as WATTSON_DOMAIN,
-)
-from custom_components.wattson_simulator.const import DOMAIN as SIM_DOMAIN
-from custom_components.wattson_simulator.const import PROGRAMS
+from custom_components.wattson.const import DOMAIN as WATTSON_DOMAIN
+
+from .conftest import WattsonTestContext, create_wattson_test_context
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
     from custom_components.wattson.coordinator import WattsonCoordinator
-    from custom_components.wattson_simulator.engine import SimulationEngine
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 SIM_POWER_ENTITY = "sensor.dryer_power"
 
 
-class E2EContext:
-    """Bundle returned by the e2e_setup fixture."""
-
-    def __init__(
-        self,
-        hass: HomeAssistant,
-        wattson_entry: MockConfigEntry,
-        sim_entry: MockConfigEntry,
-        coordinator: WattsonCoordinator,
-        engine: SimulationEngine,
-        mock_time: object,
-        t: float,
-        start_dt: object,
-    ) -> None:
-        self.hass = hass
-        self.wattson_entry = wattson_entry
-        self.sim_entry = sim_entry
-        self.coordinator = coordinator
-        self.engine = engine
-        self.mock_time = mock_time
-        self.t = t
-        self._start_dt = start_dt
-        self._dt_offset: float = 0.0
-
-    async def advance(self, seconds: float, step: float = 2.0) -> None:
-        """Advance wall-clock and fire HA time events in *step*-second increments."""
-        elapsed = 0.0
-        while elapsed < seconds:
-            self.t += step
-            self.mock_time.time.return_value = self.t
-            self._dt_offset += step
-            async_fire_time_changed(
-                self.hass, self._start_dt + timedelta(seconds=self._dt_offset)
-            )
-            await self.hass.async_block_till_done()
-            elapsed += step
-
-    async def run_full_cycle(self, program_key: str) -> None:
-        """Select a program, start the simulator, advance through the full cycle + end delay."""
-        self.engine.set_program(program_key)
-        self.engine.start()
-        await self.hass.async_block_till_done()
-
-        program = PROGRAMS[program_key]
-        total_duration = sum(p.duration_s for p in program.phases)
-        await self.advance(total_duration + 60)
-
-
 @pytest.fixture
-async def e2e(hass: HomeAssistant) -> E2EContext:
-    """Set up both integrations wired together and return an E2EContext."""
-    sim_entry = MockConfigEntry(
-        domain=SIM_DOMAIN,
-        title="Dryer",
-        data={"name": "Dryer"},
-        unique_id="sim_dryer",
-    )
-    sim_entry.add_to_hass(hass)
-
-    wattson_entry = MockConfigEntry(
-        domain=WATTSON_DOMAIN,
-        title="Dryer",
-        data={
-            "name": "Dryer",
-            CONF_SOURCE_TYPE: SOURCE_ENTITY,
-            CONF_ENTITY_ID: SIM_POWER_ENTITY,
-            CONF_START_THRESHOLD: 5.0,
-        },
-        unique_id=SIM_POWER_ENTITY,
-    )
-    wattson_entry.add_to_hass(hass)
-
-    t = 1_000_000.0
-    random.seed(42)
-    start_dt = dt_util.utcnow()
-
-    with patch("custom_components.wattson.coordinator.time") as mock_time:
-        mock_time.time.return_value = t
-
-        # persistent_notification is needed by the coordinator's _notify_new_profile.
-        await async_setup_component(hass, "persistent_notification", {})
-
-        # Set up the simulator first so its sensor.dryer_power entity exists.
-        assert await async_setup_component(hass, SIM_DOMAIN, {})
-        await hass.async_block_till_done()
-
-        # Now set up Wattson — it will subscribe to the simulator's entity.
-        assert await async_setup_component(hass, WATTSON_DOMAIN, {})
-        await hass.async_block_till_done()
-
-        coordinator: WattsonCoordinator = hass.data[WATTSON_DOMAIN][
-            wattson_entry.entry_id
-        ]["coordinator"]
-        engine: SimulationEngine = hass.data[SIM_DOMAIN][sim_entry.entry_id]["engine"]
-
-        ctx = E2EContext(
-            hass,
-            wattson_entry,
-            sim_entry,
-            coordinator,
-            engine,
-            mock_time,
-            t,
-            start_dt,
-        )
-        yield ctx  # type: ignore[misc]
+async def e2e(hass: HomeAssistant) -> WattsonTestContext:
+    """Set up both integrations wired together."""
+    async for ctx in create_wattson_test_context(
+        hass,
+        name="Dryer",
+        power_entity=SIM_POWER_ENTITY,
+    ):
+        yield ctx
 
 
 # ---------------------------------------------------------------------------
@@ -155,7 +38,7 @@ async def e2e(hass: HomeAssistant) -> E2EContext:
 # ---------------------------------------------------------------------------
 
 
-async def test_full_cycle_creates_profile(e2e: E2EContext) -> None:
+async def test_full_cycle_creates_profile(e2e: WattsonTestContext) -> None:
     """First-ever cycle: Quick Dry creates one profile and one stored cycle."""
     hass = e2e.hass
 
@@ -184,7 +67,7 @@ async def test_full_cycle_creates_profile(e2e: E2EContext) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_second_cycle_matches_profile(e2e: E2EContext) -> None:
+async def test_second_cycle_matches_profile(e2e: WattsonTestContext) -> None:
     """Running the same program twice should match, not create a second profile."""
     await e2e.run_full_cycle("quick_dry")
     assert len(e2e.coordinator.store.profiles) == 1
@@ -203,7 +86,9 @@ async def test_second_cycle_matches_profile(e2e: E2EContext) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_different_program_creates_second_profile(e2e: E2EContext) -> None:
+async def test_different_program_creates_second_profile(
+    e2e: WattsonTestContext,
+) -> None:
     """Quick Dry then Delicate should produce two distinct profiles."""
     await e2e.run_full_cycle("quick_dry")
     assert len(e2e.coordinator.store.profiles) == 1
@@ -222,7 +107,7 @@ async def test_different_program_creates_second_profile(e2e: E2EContext) -> None
 # ---------------------------------------------------------------------------
 
 
-async def test_mid_cycle_program_identification(e2e: E2EContext) -> None:
+async def test_mid_cycle_program_identification(e2e: WattsonTestContext) -> None:
     """After one learned cycle, a second run shows the program name mid-cycle."""
     await e2e.run_full_cycle("quick_dry")
     assert len(e2e.coordinator.store.profiles) == 1
@@ -246,7 +131,7 @@ async def test_mid_cycle_program_identification(e2e: E2EContext) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_time_remaining_monotonic(e2e: E2EContext) -> None:
+async def test_time_remaining_monotonic(e2e: WattsonTestContext) -> None:
     """Time remaining should never jump backwards during a cycle."""
     await e2e.run_full_cycle("quick_dry")
 
@@ -278,7 +163,7 @@ async def test_time_remaining_monotonic(e2e: E2EContext) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_short_cycle_discarded(e2e: E2EContext) -> None:
+async def test_short_cycle_discarded(e2e: WattsonTestContext) -> None:
     """A very short cycle should not create a profile or store a cycle."""
     e2e.engine.set_program("quick_dry")
     e2e.engine.start()
@@ -299,7 +184,7 @@ async def test_short_cycle_discarded(e2e: E2EContext) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_rename_profile_via_text_entity(e2e: E2EContext) -> None:
+async def test_rename_profile_via_text_entity(e2e: WattsonTestContext) -> None:
     """Editing the text entity renames the selected profile."""
     hass = e2e.hass
     await e2e.run_full_cycle("quick_dry")
@@ -325,7 +210,7 @@ async def test_rename_profile_via_text_entity(e2e: E2EContext) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_delete_profile_via_button(e2e: E2EContext) -> None:
+async def test_delete_profile_via_button(e2e: WattsonTestContext) -> None:
     """Pressing the delete button removes the selected profile."""
     hass = e2e.hass
     await e2e.run_full_cycle("quick_dry")
@@ -360,7 +245,7 @@ async def test_delete_profile_via_button(e2e: E2EContext) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_rename_profile_via_service(e2e: E2EContext) -> None:
+async def test_rename_profile_via_service(e2e: WattsonTestContext) -> None:
     """The wattson.rename_profile service renames the selected profile."""
     hass = e2e.hass
     await e2e.run_full_cycle("quick_dry")
@@ -381,7 +266,7 @@ async def test_rename_profile_via_service(e2e: E2EContext) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_delete_profile_via_service(e2e: E2EContext) -> None:
+async def test_delete_profile_via_service(e2e: WattsonTestContext) -> None:
     """The wattson.delete_profile service removes the selected profile."""
     hass = e2e.hass
     await e2e.run_full_cycle("quick_dry")
@@ -403,7 +288,7 @@ async def test_delete_profile_via_service(e2e: E2EContext) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_list_profiles_service(e2e: E2EContext) -> None:
+async def test_list_profiles_service(e2e: WattsonTestContext) -> None:
     """The wattson.list_profiles service returns all profile data."""
     hass = e2e.hass
     await e2e.run_full_cycle("quick_dry")
@@ -431,7 +316,7 @@ async def test_list_profiles_service(e2e: E2EContext) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_anti_wrinkle_cycle_ends(e2e: E2EContext) -> None:
+async def test_anti_wrinkle_cycle_ends(e2e: WattsonTestContext) -> None:
     """The anti-wrinkle program (intermittent spikes) still ends the cycle."""
     await e2e.run_full_cycle("anti_wrinkle_test")
 
@@ -445,7 +330,7 @@ async def test_anti_wrinkle_cycle_ends(e2e: E2EContext) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_cycle_end_delay_is_fast(e2e: E2EContext) -> None:
+async def test_cycle_end_delay_is_fast(e2e: WattsonTestContext) -> None:
     """After simulator stops, the detector should go OFF within ~40s, not 180s."""
     e2e.engine.set_program("quick_dry")
     e2e.engine.start()
@@ -473,7 +358,7 @@ async def test_cycle_end_delay_is_fast(e2e: E2EContext) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_options_flow_changes_thresholds(e2e: E2EContext) -> None:
+async def test_options_flow_changes_thresholds(e2e: WattsonTestContext) -> None:
     """Changing start_threshold via options makes detector ignore lower power."""
     hass = e2e.hass
 
@@ -519,7 +404,7 @@ async def test_options_flow_changes_thresholds(e2e: E2EContext) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_unload_and_reload(e2e: E2EContext) -> None:
+async def test_unload_and_reload(e2e: WattsonTestContext) -> None:
     """Profiles survive an unload / reload cycle."""
     hass = e2e.hass
     await e2e.run_full_cycle("quick_dry")
@@ -549,7 +434,7 @@ async def test_unload_and_reload(e2e: E2EContext) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_full_cycle_detects_phases(e2e: E2EContext) -> None:
+async def test_full_cycle_detects_phases(e2e: WattsonTestContext) -> None:
     """A completed cycle with distinct power levels should detect phases."""
     await e2e.run_full_cycle("normal_dry")
 
@@ -568,7 +453,7 @@ async def test_full_cycle_detects_phases(e2e: E2EContext) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_anti_wrinkle_detects_intermittent_phase(e2e: E2EContext) -> None:
+async def test_anti_wrinkle_detects_intermittent_phase(e2e: WattsonTestContext) -> None:
     """The anti-wrinkle program should produce an intermittent phase at the end."""
     await e2e.run_full_cycle("anti_wrinkle_test")
 
@@ -585,7 +470,7 @@ async def test_anti_wrinkle_detects_intermittent_phase(e2e: E2EContext) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_phase_sensor_entity_exists(e2e: E2EContext) -> None:
+async def test_phase_sensor_entity_exists(e2e: WattsonTestContext) -> None:
     """Phase sensor exists and is None when no cycle is running."""
     hass = e2e.hass
     state = hass.states.get("sensor.dryer_phase")
@@ -598,7 +483,7 @@ async def test_phase_sensor_entity_exists(e2e: E2EContext) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_phase_select_exists(e2e: E2EContext) -> None:
+async def test_phase_select_exists(e2e: WattsonTestContext) -> None:
     """Phase select entity exists (may have no options if no profiles yet)."""
     hass = e2e.hass
     state = hass.states.get("select.dryer_profile_phase")
@@ -610,7 +495,7 @@ async def test_phase_select_exists(e2e: E2EContext) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_rename_phase_via_text_entity(e2e: E2EContext) -> None:
+async def test_rename_phase_via_text_entity(e2e: WattsonTestContext) -> None:
     """Editing the phase name text entity renames the selected phase."""
     hass = e2e.hass
     await e2e.run_full_cycle("normal_dry")
@@ -649,7 +534,7 @@ async def test_rename_phase_via_text_entity(e2e: E2EContext) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_mark_phase_done_via_switch(e2e: E2EContext) -> None:
+async def test_mark_phase_done_via_switch(e2e: WattsonTestContext) -> None:
     """Toggling the phase-done switch marks the phase."""
     hass = e2e.hass
     await e2e.run_full_cycle("normal_dry")

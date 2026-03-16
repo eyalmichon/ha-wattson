@@ -1,6 +1,17 @@
-"""Shared energy computation utilities."""
+"""Shared energy and signal utilities."""
 
 from __future__ import annotations
+
+import numpy as np
+
+
+def samples_to_arrays(
+    samples: list[tuple[float, float]],
+) -> tuple[np.ndarray, np.ndarray]:
+    """Split (time, power) samples into separate times and powers arrays."""
+    if not samples:
+        return np.array([]), np.array([])
+    return np.array([s[0] for s in samples]), np.array([s[1] for s in samples])
 
 
 def trapezoidal_energy_wh(

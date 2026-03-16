@@ -128,11 +128,54 @@ class TestSimilarCurves:
         assert result.correlation >= 0.85
 
 
+class TestFlatSignalMatching:
+    """Flat constant-power signals should match by level and duration."""
+
+    def test_flat_signal_matches(self, matcher: ProfileMatcher) -> None:
+        """Two flat signals at the same power level should match."""
+        random.seed(42)
+        flat_a = [(i * 10, 2800 + random.gauss(0, 50)) for i in range(11)]
+        flat_b = [(i * 10, 2800 + random.gauss(0, 50)) for i in range(11)]
+
+        cycle = _make_cycle(flat_b, duration_s=100.0)
+        profile = _make_profile(flat_a, avg_duration_s=100.0)
+
+        result = matcher.match(cycle, [profile])
+        assert result is not None, "Flat signals at same power level should match"
+
+    def test_flat_signal_different_power_no_match(
+        self, matcher: ProfileMatcher
+    ) -> None:
+        """Two flat signals at very different power levels should not match."""
+        flat_high = [(i * 10, 2800) for i in range(11)]
+        flat_low = [(i * 10, 200) for i in range(11)]
+
+        cycle = _make_cycle(flat_low, duration_s=100.0)
+        profile = _make_profile(flat_high, avg_duration_s=100.0)
+
+        result = matcher.match(cycle, [profile])
+        assert result is None, (
+            "Flat signals at very different power levels should not match"
+        )
+
+    def test_flat_signal_different_duration_no_match(
+        self, matcher: ProfileMatcher
+    ) -> None:
+        """Same power level but wildly different duration should not match."""
+        flat_short = [(i * 10, 1000) for i in range(11)]
+        flat_long = [(i * 10, 1000) for i in range(11)]
+
+        cycle = _make_cycle(flat_short, duration_s=100.0)
+        profile = _make_profile(flat_long, avg_duration_s=500.0)
+
+        result = matcher.match(cycle, [profile])
+        assert result is None, "Same power but 5x different duration should not match"
+
+
 class TestDifferentCurves:
     """Completely different curves should not match."""
 
     def test_no_match(self, matcher: ProfileMatcher) -> None:
-        # Flat vs spiky
         flat_samples = [(i * 10, 100) for i in range(11)]
         spiky_samples = [(i * 10, 500 if i % 2 == 0 else 10) for i in range(11)]
 

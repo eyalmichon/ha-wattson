@@ -2,137 +2,31 @@
 
 from __future__ import annotations
 
-import random
-from datetime import timedelta
 from typing import TYPE_CHECKING
-from unittest.mock import patch
 
 import pytest
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
-from homeassistant.setup import async_setup_component
-from homeassistant.util import dt as dt_util
-from pytest_homeassistant_custom_component.common import (
-    MockConfigEntry,
-    async_fire_time_changed,
-)
 
-from custom_components.wattson.const import (
-    CONF_ENTITY_ID,
-    CONF_SOURCE_TYPE,
-    CONF_START_THRESHOLD,
-    SOURCE_ENTITY,
-    CycleState,
-)
-from custom_components.wattson.const import (
-    DOMAIN as WATTSON_DOMAIN,
-)
-from custom_components.wattson_simulator.const import DOMAIN as SIM_DOMAIN
-from custom_components.wattson_simulator.const import PROGRAMS
+from custom_components.wattson.const import CycleState
+
+from .conftest import WattsonTestContext, create_wattson_test_context
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
-    from custom_components.wattson.coordinator import WattsonCoordinator
-    from custom_components.wattson_simulator.engine import SimulationEngine
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 SIM_POWER_ENTITY = "sensor.disrupt_power"
 
 
-class DisruptCtx:
-    """Test context for disruption tests."""
-
-    def __init__(
-        self,
-        hass: HomeAssistant,
-        coordinator: WattsonCoordinator,
-        engine: SimulationEngine,
-        mock_time: object,
-        t: float,
-        start_dt: object,
-    ) -> None:
-        self.hass = hass
-        self.coordinator = coordinator
-        self.engine = engine
-        self.mock_time = mock_time
-        self.t = t
-        self._start_dt = start_dt
-        self._dt_offset: float = 0.0
-
-    async def advance(self, seconds: float, step: float = 2.0) -> None:
-        elapsed = 0.0
-        while elapsed < seconds:
-            self.t += step
-            self.mock_time.time.return_value = self.t
-            self._dt_offset += step
-            async_fire_time_changed(
-                self.hass, self._start_dt + timedelta(seconds=self._dt_offset)
-            )
-            await self.hass.async_block_till_done()
-            elapsed += step
-
-    async def run_full_cycle(self, program_key: str) -> None:
-        self.engine.set_program(program_key)
-        self.engine.start()
-        await self.hass.async_block_till_done()
-
-        program = PROGRAMS[program_key]
-        total_duration = sum(p.duration_s for p in program.phases)
-        await self.advance(total_duration + 80)
-
-    async def set_sensor(self, state: str) -> None:
-        """Manually set the power sensor state."""
-        self.hass.states.async_set(SIM_POWER_ENTITY, state)
-        await self.hass.async_block_till_done()
-
-
 @pytest.fixture
-async def ctx(hass: HomeAssistant) -> DisruptCtx:
+async def ctx(hass: HomeAssistant) -> WattsonTestContext:
     """Set up Wattson + simulator for disruption tests."""
-    sim_entry = MockConfigEntry(
-        domain=SIM_DOMAIN,
-        title="Disrupt",
-        data={"name": "Disrupt"},
-        unique_id="sim_disrupt",
-    )
-    sim_entry.add_to_hass(hass)
-
-    wattson_entry = MockConfigEntry(
-        domain=WATTSON_DOMAIN,
-        title="Disrupt",
-        data={
-            "name": "Disrupt",
-            CONF_SOURCE_TYPE: SOURCE_ENTITY,
-            CONF_ENTITY_ID: SIM_POWER_ENTITY,
-            CONF_START_THRESHOLD: 5.0,
-        },
-        unique_id=SIM_POWER_ENTITY,
-    )
-    wattson_entry.add_to_hass(hass)
-
-    t = 1_000_000.0
-    random.seed(42)
-    start_dt = dt_util.utcnow()
-
-    with patch("custom_components.wattson.coordinator.time") as mock_time:
-        mock_time.time.return_value = t
-
-        await async_setup_component(hass, "persistent_notification", {})
-        assert await async_setup_component(hass, SIM_DOMAIN, {})
-        await hass.async_block_till_done()
-        assert await async_setup_component(hass, WATTSON_DOMAIN, {})
-        await hass.async_block_till_done()
-
-        coordinator: WattsonCoordinator = hass.data[WATTSON_DOMAIN][
-            wattson_entry.entry_id
-        ]["coordinator"]
-        engine: SimulationEngine = hass.data[SIM_DOMAIN][sim_entry.entry_id]["engine"]
-
-        yield DisruptCtx(hass, coordinator, engine, mock_time, t, start_dt)  # type: ignore[misc]
+    async for c in create_wattson_test_context(
+        hass,
+        name="Disrupt",
+        power_entity=SIM_POWER_ENTITY,
+    ):
+        yield c
 
 
 # ---------------------------------------------------------------------------
@@ -140,7 +34,7 @@ async def ctx(hass: HomeAssistant) -> DisruptCtx:
 # ---------------------------------------------------------------------------
 
 
-async def test_power_outage_sensor_unavailable(ctx: DisruptCtx) -> None:
+async def test_power_outage_sensor_unavailable(ctx: WattsonTestContext) -> None:
     """When the sensor becomes unavailable mid-cycle, the cycle should eventually end."""
     ctx.engine.set_program("normal_dry")
     ctx.engine.start()
@@ -165,7 +59,7 @@ async def test_power_outage_sensor_unavailable(ctx: DisruptCtx) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_door_open_sudden_stop(ctx: DisruptCtx) -> None:
+async def test_door_open_sudden_stop(ctx: WattsonTestContext) -> None:
     """Sudden power drop to 0 should end the cycle after end_delay."""
     ctx.engine.set_program("normal_dry")
     ctx.engine.start()
@@ -192,7 +86,7 @@ async def test_door_open_sudden_stop(ctx: DisruptCtx) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_brief_power_dip_continues(ctx: DisruptCtx) -> None:
+async def test_brief_power_dip_continues(ctx: WattsonTestContext) -> None:
     """A brief power dip (shorter than end_delay) should not end the cycle."""
     ctx.engine.set_program("normal_dry")
     ctx.engine.start()
@@ -221,7 +115,7 @@ async def test_brief_power_dip_continues(ctx: DisruptCtx) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_long_pause_new_cycle(ctx: DisruptCtx) -> None:
+async def test_long_pause_new_cycle(ctx: WattsonTestContext) -> None:
     """A pause longer than end_delay ends the cycle; resuming starts a new one."""
     ctx.engine.set_program("normal_dry")
     ctx.engine.start()
@@ -252,7 +146,7 @@ async def test_long_pause_new_cycle(ctx: DisruptCtx) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_sensor_reports_unknown_mid_cycle(ctx: DisruptCtx) -> None:
+async def test_sensor_reports_unknown_mid_cycle(ctx: WattsonTestContext) -> None:
     """Sensor going to 'unknown' mid-cycle should feed 0W and eventually end."""
     ctx.engine.set_program("normal_dry")
     ctx.engine.start()
@@ -273,7 +167,7 @@ async def test_sensor_reports_unknown_mid_cycle(ctx: DisruptCtx) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_rapid_start_stop_no_false_profile(ctx: DisruptCtx) -> None:
+async def test_rapid_start_stop_no_false_profile(ctx: WattsonTestContext) -> None:
     """Rapid power spikes and drops should not create profiles."""
     for _ in range(3):
         await ctx.set_sensor("2000")
@@ -293,7 +187,7 @@ async def test_rapid_start_stop_no_false_profile(ctx: DisruptCtx) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_cycle_longer_than_profile(ctx: DisruptCtx) -> None:
+async def test_cycle_longer_than_profile(ctx: WattsonTestContext) -> None:
     """A cycle running 3x longer than the stored profile shouldn't crash."""
     await ctx.run_full_cycle("quick_dry")
     assert len(ctx.coordinator.store.profiles) == 1
@@ -322,7 +216,7 @@ async def test_cycle_longer_than_profile(ctx: DisruptCtx) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_aborted_cycle_no_profile_corruption(ctx: DisruptCtx) -> None:
+async def test_aborted_cycle_no_profile_corruption(ctx: WattsonTestContext) -> None:
     """Aborting a cycle early should not corrupt the stored profile."""
     # Learn the normal pattern first.
     await ctx.run_full_cycle("normal_dry")
@@ -355,7 +249,7 @@ async def test_aborted_cycle_no_profile_corruption(ctx: DisruptCtx) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_sensor_unavailable_recovery(ctx: DisruptCtx) -> None:
+async def test_sensor_unavailable_recovery(ctx: WattsonTestContext) -> None:
     """Sensor going unavailable and then returning should not leave stale state."""
     ctx.engine.set_program("normal_dry")
     ctx.engine.start()
@@ -385,7 +279,7 @@ async def test_sensor_unavailable_recovery(ctx: DisruptCtx) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_back_to_back_cycles(ctx: DisruptCtx) -> None:
+async def test_back_to_back_cycles(ctx: WattsonTestContext) -> None:
     """Two cycles back-to-back should each be processed correctly."""
     # Run the first full cycle normally.
     await ctx.run_full_cycle("quick_dry")

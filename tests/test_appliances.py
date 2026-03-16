@@ -2,136 +2,29 @@
 
 from __future__ import annotations
 
-import random
-from datetime import timedelta
 from typing import TYPE_CHECKING
-from unittest.mock import patch
 
 import pytest
-from homeassistant.setup import async_setup_component
-from homeassistant.util import dt as dt_util
-from pytest_homeassistant_custom_component.common import (
-    MockConfigEntry,
-    async_fire_time_changed,
-)
 
-from custom_components.wattson.const import (
-    CONF_ENTITY_ID,
-    CONF_SOURCE_TYPE,
-    CONF_START_THRESHOLD,
-    SOURCE_ENTITY,
-    adaptive_phase_params,
-)
-from custom_components.wattson.const import (
-    DOMAIN as WATTSON_DOMAIN,
-)
-from custom_components.wattson_simulator.const import DOMAIN as SIM_DOMAIN
+from custom_components.wattson.const import adaptive_phase_params
 from custom_components.wattson_simulator.const import PROGRAMS
+
+from .conftest import WattsonTestContext, create_wattson_test_context
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
-    from custom_components.wattson.coordinator import WattsonCoordinator
-    from custom_components.wattson_simulator.engine import SimulationEngine
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-SIM_POWER_ENTITY = "sensor.appliance_power"
-
-
-class ApplianceCtx:
-    """Test context for per-appliance e2e tests."""
-
-    def __init__(
-        self,
-        hass: HomeAssistant,
-        coordinator: WattsonCoordinator,
-        engine: SimulationEngine,
-        mock_time: object,
-        t: float,
-        start_dt: object,
-    ) -> None:
-        self.hass = hass
-        self.coordinator = coordinator
-        self.engine = engine
-        self.mock_time = mock_time
-        self.t = t
-        self._start_dt = start_dt
-        self._dt_offset: float = 0.0
-
-    async def advance(self, seconds: float, step: float = 2.0) -> None:
-        elapsed = 0.0
-        while elapsed < seconds:
-            self.t += step
-            self.mock_time.time.return_value = self.t
-            self._dt_offset += step
-            async_fire_time_changed(
-                self.hass, self._start_dt + timedelta(seconds=self._dt_offset)
-            )
-            await self.hass.async_block_till_done()
-            elapsed += step
-
-    async def run_full_cycle(self, program_key: str) -> None:
-        self.engine.set_program(program_key)
-        self.engine.start()
-        await self.hass.async_block_till_done()
-
-        program = PROGRAMS[program_key]
-        total_duration = sum(p.duration_s for p in program.phases)
-        # After phases complete the detector needs end_delay to fire.
-        # The adaptive end_delay can be up to 10% of the cycle duration,
-        # so wait generously to cover both default and adaptive delays.
-        end_buffer = max(80, total_duration * 0.15)
-        await self.advance(total_duration + end_buffer)
-
 
 @pytest.fixture
-async def appliance_ctx(hass: HomeAssistant) -> ApplianceCtx:
-    """Set up Wattson + simulator for appliance tests (lower start threshold for low-power devices)."""
-    sim_entry = MockConfigEntry(
-        domain=SIM_DOMAIN,
-        title="Appliance",
-        data={"name": "Appliance"},
-        unique_id="sim_appliance",
-    )
-    sim_entry.add_to_hass(hass)
-
-    wattson_entry = MockConfigEntry(
-        domain=WATTSON_DOMAIN,
-        title="Appliance",
-        data={
-            "name": "Appliance",
-            CONF_SOURCE_TYPE: SOURCE_ENTITY,
-            CONF_ENTITY_ID: SIM_POWER_ENTITY,
-            CONF_START_THRESHOLD: 3.0,
-        },
-        unique_id=SIM_POWER_ENTITY,
-    )
-    wattson_entry.add_to_hass(hass)
-
-    t = 1_000_000.0
-    random.seed(42)
-    start_dt = dt_util.utcnow()
-
-    with patch("custom_components.wattson.coordinator.time") as mock_time:
-        mock_time.time.return_value = t
-
-        await async_setup_component(hass, "persistent_notification", {})
-        assert await async_setup_component(hass, SIM_DOMAIN, {})
-        await hass.async_block_till_done()
-        assert await async_setup_component(hass, WATTSON_DOMAIN, {})
-        await hass.async_block_till_done()
-
-        coordinator: WattsonCoordinator = hass.data[WATTSON_DOMAIN][
-            wattson_entry.entry_id
-        ]["coordinator"]
-        engine: SimulationEngine = hass.data[SIM_DOMAIN][sim_entry.entry_id]["engine"]
-
-        ctx = ApplianceCtx(hass, coordinator, engine, mock_time, t, start_dt)
-        yield ctx  # type: ignore[misc]
+async def appliance_ctx(hass: HomeAssistant) -> WattsonTestContext:
+    """Set up Wattson + simulator for appliance tests."""
+    async for ctx in create_wattson_test_context(
+        hass,
+        name="Appliance",
+        power_entity="sensor.appliance_power",
+        start_threshold=3.0,
+    ):
+        yield ctx
 
 
 # ---------------------------------------------------------------------------
@@ -221,7 +114,7 @@ _MATCHING_MAY_DIFFER = {
 
 @pytest.mark.parametrize(("program_key", "expected_phase_count"), APPLIANCE_PROGRAMS)
 async def test_appliance_two_cycles(
-    appliance_ctx: ApplianceCtx,
+    appliance_ctx: WattsonTestContext,
     program_key: str,
     expected_phase_count: int,
 ) -> None:
@@ -281,7 +174,7 @@ _END_DELAY_TESTABLE = [
 
 @pytest.mark.parametrize(("program_key", "expected_phase_count"), _END_DELAY_TESTABLE)
 async def test_appliance_adaptive_end_delay(
-    appliance_ctx: ApplianceCtx,
+    appliance_ctx: WattsonTestContext,
     program_key: str,
     expected_phase_count: int,
 ) -> None:
@@ -315,7 +208,7 @@ _TIME_REMAINING_EXCLUDED = _MATCHING_MAY_DIFFER | {
     [p for p in APPLIANCE_PROGRAMS if p[0] not in _TIME_REMAINING_EXCLUDED],
 )
 async def test_appliance_time_remaining_during_cycle(
-    appliance_ctx: ApplianceCtx,
+    appliance_ctx: WattsonTestContext,
     program_key: str,
     expected_phase_count: int,
 ) -> None:
@@ -357,7 +250,7 @@ REALISTIC_PROGRAMS = [
 
 @pytest.mark.parametrize(("program_key", "min_phases"), REALISTIC_PROGRAMS)
 async def test_realistic_appliance_phase_count(
-    appliance_ctx: ApplianceCtx,
+    appliance_ctx: WattsonTestContext,
     program_key: str,
     min_phases: int,
 ) -> None:
@@ -403,7 +296,7 @@ STRESS_PROGRAMS = [
 
 @pytest.mark.parametrize(("program_key", "min_phases"), STRESS_PROGRAMS)
 async def test_stress_program_phase_count(
-    appliance_ctx: ApplianceCtx,
+    appliance_ctx: WattsonTestContext,
     program_key: str,
     min_phases: int,
 ) -> None:
@@ -447,7 +340,7 @@ REPLAY_PROGRAMS = [
 
 @pytest.mark.parametrize(("program_key", "min_phases"), REPLAY_PROGRAMS)
 async def test_replay_real_data_phase_count(
-    appliance_ctx: ApplianceCtx,
+    appliance_ctx: WattsonTestContext,
     program_key: str,
     min_phases: int,
 ) -> None:

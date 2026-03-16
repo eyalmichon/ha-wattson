@@ -19,11 +19,16 @@ from .const import (
     MATCH_CORRELATION_AMBIGUOUS,
     MATCH_CORRELATION_THRESHOLD,
     MATCH_DTW_THRESHOLD,
+    MATCH_DURATION_WEIGHT,
+    MATCH_LEVEL_WEIGHT,
+    MATCH_SCORE_THRESHOLD,
+    MATCH_SHAPE_WEIGHT,
     MIN_SAMPLES,
     PROFILE_UPDATE_ALPHA,
     RESAMPLE_POINTS,
     STD_EPSILON,
 )
+from .energy import samples_to_arrays
 
 if TYPE_CHECKING:
     from .cycle_recorder import CycleData
@@ -128,9 +133,7 @@ def _resample(samples: list[tuple[float, float]], n_points: int) -> np.ndarray:
     if len(samples) < MIN_SAMPLES:
         return np.zeros(n_points)
 
-    times = np.array([s[0] for s in samples])
-    powers = np.array([s[1] for s in samples])
-
+    times, powers = samples_to_arrays(samples)
     target_times = np.linspace(times[0], times[-1], n_points)
     return np.interp(target_times, times, powers)
 
@@ -208,11 +211,18 @@ class ProfileMatcher:
         self._alpha = update_alpha
 
     def match(self, cycle: CycleData, profiles: list[Profile]) -> MatchResult | None:
-        """Find the best matching profile for a completed cycle."""
+        """Find the best matching profile for a completed cycle.
+
+        Uses a combined score of waveform correlation, mean power level
+        similarity, and duration similarity so that flat-signal appliances
+        (kettles, toasters, water heaters) can match even when Pearson
+        correlation is near zero.
+        """
         if not profiles or len(cycle.samples) < MIN_SAMPLES:
             return None
 
         cycle_curve = _resample(cycle.samples, self._n_points)
+        cycle_mean = float(np.mean(cycle_curve))
 
         best: MatchResult | None = None
         best_score = -1.0
@@ -224,25 +234,56 @@ class ProfileMatcher:
             prof_curve = _resample(profile.samples, self._n_points)
             corr = _correlation(cycle_curve, prof_curve)
 
+            # Power level similarity: 1.0 when means match, 0.0 when very different.
+            ref_power = max(cycle_mean, float(np.mean(prof_curve)), 1.0)
+            level_sim = max(
+                0.0,
+                1.0 - abs(cycle_mean - float(np.mean(prof_curve))) / ref_power,
+            )
+
+            # Duration similarity: 1.0 when durations match, 0.0 when 2x+ different.
+            dur_ratio = min(cycle.duration_s, profile.avg_duration_s) / max(
+                cycle.duration_s, profile.avg_duration_s, 1.0
+            )
+            dur_sim = max(0.0, dur_ratio)
+
+            shape = max(corr, 0.0)
+            score = (
+                MATCH_SHAPE_WEIGHT * shape
+                + MATCH_LEVEL_WEIGHT * level_sim
+                + MATCH_DURATION_WEIGHT * dur_sim
+            )
+
+            # Fast path: high correlation alone is sufficient.
             if corr >= self._corr_threshold:
-                if corr > best_score:
-                    best_score = corr
+                if score > best_score:
+                    best_score = score
                     best = MatchResult(
                         profile_id=profile.id,
                         profile_name=profile.name,
                         correlation=corr,
                         dtw_distance=None,
                     )
+            # DTW tiebreaker for ambiguous correlation.
             elif corr >= self._corr_ambiguous:
                 dtw = _dtw_distance(cycle_curve, prof_curve)
-                if dtw <= self._dtw_threshold and corr > best_score:
-                    best_score = corr
+                if dtw <= self._dtw_threshold and score > best_score:
+                    best_score = score
                     best = MatchResult(
                         profile_id=profile.id,
                         profile_name=profile.name,
                         correlation=corr,
                         dtw_distance=dtw,
                     )
+            # Combined score can still match flat signals with low correlation.
+            elif score >= MATCH_SCORE_THRESHOLD and score > best_score:
+                best_score = score
+                best = MatchResult(
+                    profile_id=profile.id,
+                    profile_name=profile.name,
+                    correlation=corr,
+                    dtw_distance=None,
+                )
 
         return best
 

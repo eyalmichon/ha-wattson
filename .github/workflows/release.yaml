@@ -26,7 +26,7 @@ jobs:
         run: |
           version="${{ steps.version.outputs.version }}"
           version="${version#v}"
-          sed -i "s/0.0.0/${version}/" custom_components/wattson/manifest.json
+          sed -i 's/"version": ".*"/"version": "'"${version}"'"/' custom_components/wattson/manifest.json
           cd custom_components/wattson/
           zip ../../wattson.zip -r ./
 

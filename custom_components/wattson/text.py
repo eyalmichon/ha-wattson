@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 from homeassistant.components.text import TextEntity
 from homeassistant.helpers.entity import EntityCategory
 
+from .const import MAX_NAME_LENGTH
 from .entity import WattsonEntity, get_coordinator
 
 if TYPE_CHECKING:
@@ -51,7 +52,7 @@ class WattsonProfileNameText(WattsonEntity, TextEntity):
     _attr_translation_key = "profile_name"
     _attr_entity_category = EntityCategory.CONFIG
     _attr_icon = "mdi:rename"
-    _attr_native_max = 64
+    _attr_native_max = MAX_NAME_LENGTH
 
     def __init__(
         self,
@@ -93,7 +94,7 @@ class WattsonPhaseNameText(WattsonEntity, TextEntity):
     _attr_translation_key = "phase_name"
     _attr_entity_category = EntityCategory.CONFIG
     _attr_icon = "mdi:rename"
-    _attr_native_max = 64
+    _attr_native_max = MAX_NAME_LENGTH
 
     def __init__(
         self,

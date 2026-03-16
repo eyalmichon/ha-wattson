@@ -364,8 +364,6 @@ class WattsonCoordinator:
         params = adaptive_phase_params(cycle_data.duration_s)
         new_phases = extract_phases(
             cycle_data.samples,
-            smoothing_window_s=params["smoothing_window_s"],
-            rolling_window_s=params["rolling_window_s"],
             min_duration_s=params["min_duration_s"],
         )
 
@@ -467,7 +465,7 @@ class WattsonCoordinator:
             self._init_phase(idx, phases[idx], profile)
 
         self._rolling_powers.append((timestamp, power_w))
-        cutoff = timestamp - params["rolling_window_s"]
+        cutoff = timestamp - params["phase_confirm_s"] * 2
         while self._rolling_powers and self._rolling_powers[0][0] < cutoff:
             self._rolling_powers.popleft()
 

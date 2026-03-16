@@ -143,33 +143,27 @@ async def appliance_ctx(hass: HomeAssistant) -> ApplianceCtx:
     (
         "duration_s",
         "expected_confirm",
-        "expected_rolling",
-        "expected_smooth",
         "expected_min",
         "expected_end",
     ),
     [
-        (0, 5.0, 10.0, 5.0, 3.0, 15.0),
-        (10, 5.0, 10.0, 5.0, 3.0, 15.0),
-        (60, 5.0, 10.0, 5.0, 3.0, 15.0),
-        (300, 15.0, 24.0, 15.0, 9.0, 30.0),
-        (3600, 180.0, 288.0, 180.0, 108.0, 360.0),
-        (14400, 720.0, 1152.0, 720.0, 432.0, 1440.0),
+        (0, 5.0, 3.0, 15.0),
+        (10, 5.0, 3.0, 15.0),
+        (60, 5.0, 3.0, 15.0),
+        (300, 15.0, 9.0, 30.0),
+        (3600, 180.0, 108.0, 360.0),
+        (14400, 720.0, 432.0, 1440.0),
     ],
 )
 def test_adaptive_phase_params_formula(
     duration_s: float,
     expected_confirm: float,
-    expected_rolling: float,
-    expected_smooth: float,
     expected_min: float,
     expected_end: float,
 ) -> None:
     """Verify adaptive_phase_params returns correct values for various durations."""
     p = adaptive_phase_params(duration_s)
     assert p["phase_confirm_s"] == pytest.approx(expected_confirm, abs=0.01)
-    assert p["rolling_window_s"] == pytest.approx(expected_rolling, abs=0.01)
-    assert p["smoothing_window_s"] == pytest.approx(expected_smooth, abs=0.01)
     assert p["min_duration_s"] == pytest.approx(expected_min, abs=0.01)
     assert p["end_delay_s"] == pytest.approx(expected_end, abs=0.01)
 
@@ -178,8 +172,6 @@ def test_adaptive_params_floors_prevent_degenerate() -> None:
     """Very short durations should hit the floor values."""
     p = adaptive_phase_params(1.0)
     assert p["phase_confirm_s"] == 5.0
-    assert p["rolling_window_s"] == 10.0
-    assert p["smoothing_window_s"] == 5.0
     assert p["min_duration_s"] == 3.0
     assert p["end_delay_s"] == 15.0
 
@@ -351,3 +343,136 @@ async def test_appliance_time_remaining_during_cycle(
 
     ctx.engine.stop()
     await ctx.advance(max(80, total_duration * 0.15))
+
+
+# ---------------------------------------------------------------------------
+# Realistic appliance tests: phase detection on real-world-like signals
+# ---------------------------------------------------------------------------
+
+REALISTIC_PROGRAMS = [
+    ("realistic_washer", 3),
+    ("realistic_dryer", 3),
+]
+
+
+@pytest.mark.parametrize(("program_key", "min_phases"), REALISTIC_PROGRAMS)
+async def test_realistic_appliance_phase_count(
+    appliance_ctx: ApplianceCtx,
+    program_key: str,
+    min_phases: int,
+) -> None:
+    """Realistic long-running appliances must produce multiple distinct phases.
+
+    These programs mirror real-world data captured from actual washing machines
+    and dryers.  The phase extractor must detect at least `min_phases` phases;
+    detecting only 1 means the algorithm is over-smoothing or the shift
+    threshold is too high for real-world signals.
+    """
+    ctx = appliance_ctx
+
+    await ctx.run_full_cycle(program_key)
+
+    assert ctx.coordinator.detector.state.value == "off", (
+        f"{program_key}: detector not OFF after cycle"
+    )
+    assert len(ctx.coordinator.store.profiles) >= 1, (
+        f"{program_key}: no profile created"
+    )
+
+    profile = ctx.coordinator.store.profiles[0]
+    assert profile.phases is not None, f"{program_key}: no phases detected"
+
+    phase_count = len(profile.phases)
+    assert phase_count >= min_phases, (
+        f"{program_key}: expected >= {min_phases} phases, got {phase_count}. "
+        f"Phases: {[(p.avg_power_w, p.pattern) for p in profile.phases]}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Stress-test programs: gradual ramps, high noise, similar phases, spikes
+# ---------------------------------------------------------------------------
+
+STRESS_PROGRAMS = [
+    ("stress_gradual_washer", 3),
+    ("stress_noisy_dryer", 3),
+    ("stress_similar_phases", 3),
+    ("stress_transient_spikes", 2),
+]
+
+
+@pytest.mark.parametrize(("program_key", "min_phases"), STRESS_PROGRAMS)
+async def test_stress_program_phase_count(
+    appliance_ctx: ApplianceCtx,
+    program_key: str,
+    min_phases: int,
+) -> None:
+    """Stress-test programs must detect the correct number of phases.
+
+    These programs use RAMP, NOISY, and other non-trivial phase types that
+    are designed to challenge the phase detection algorithm with realistic
+    conditions: gradual transitions, high noise, subtle differences, and
+    transient spikes.
+    """
+    ctx = appliance_ctx
+
+    await ctx.run_full_cycle(program_key)
+
+    assert ctx.coordinator.detector.state.value == "off", (
+        f"{program_key}: detector not OFF after cycle"
+    )
+    assert len(ctx.coordinator.store.profiles) >= 1, (
+        f"{program_key}: no profile created"
+    )
+
+    profile = ctx.coordinator.store.profiles[0]
+    assert profile.phases is not None, f"{program_key}: no phases detected"
+
+    phase_count = len(profile.phases)
+    assert phase_count >= min_phases, (
+        f"{program_key}: expected >= {min_phases} phases, got {phase_count}. "
+        f"Phases: {[(p.avg_power_w, p.pattern) for p in profile.phases]}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Replay tests: raw captured data from real appliances
+# ---------------------------------------------------------------------------
+
+REPLAY_PROGRAMS = [
+    ("replay_real_washer", 3),
+    ("replay_real_dryer", 3),
+]
+
+
+@pytest.mark.parametrize(("program_key", "min_phases"), REPLAY_PROGRAMS)
+async def test_replay_real_data_phase_count(
+    appliance_ctx: ApplianceCtx,
+    program_key: str,
+    min_phases: int,
+) -> None:
+    """Replay of captured real-world power data must detect multiple phases.
+
+    These programs play back actual power readings captured from the user's
+    washing machine and dryer.  The phase extractor must identify the same
+    distinct phases a human would see in the data.
+    """
+    ctx = appliance_ctx
+
+    await ctx.run_full_cycle(program_key)
+
+    assert ctx.coordinator.detector.state.value == "off", (
+        f"{program_key}: detector not OFF after cycle"
+    )
+    assert len(ctx.coordinator.store.profiles) >= 1, (
+        f"{program_key}: no profile created"
+    )
+
+    profile = ctx.coordinator.store.profiles[0]
+    assert profile.phases is not None, f"{program_key}: no phases detected"
+
+    phase_count = len(profile.phases)
+    assert phase_count >= min_phases, (
+        f"{program_key}: expected >= {min_phases} phases, got {phase_count}. "
+        f"Phases: {[(p.avg_power_w, p.pattern) for p in profile.phases]}"
+    )

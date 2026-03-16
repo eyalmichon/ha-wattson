@@ -1,7 +1,10 @@
-"""Phase extraction from recorded power curves.
+"""Phase extraction from recorded power curves using Binary Segmentation.
 
 Analyzes a completed cycle's power samples to detect distinct phases
-(e.g., heating, cooldown, anti-wrinkle) based on sustained power level shifts.
+(e.g., heating, cooldown, anti-wrinkle) by recursively finding splits
+that minimize within-segment variance, with a BIC-inspired penalty to
+prevent over-segmentation.  Each sub-segment is re-normalised locally
+so that fine structure is visible regardless of the global power range.
 """
 
 from __future__ import annotations
@@ -10,32 +13,35 @@ import numpy as np
 
 from .const import (
     MIN_SAMPLES,
+    PHASE_FLAT_TOLERANCE,
     PHASE_INTERMITTENT_COV,
     PHASE_MIN_DURATION_S,
-    PHASE_ROLLING_WINDOW_S,
-    PHASE_SHIFT_PCT,
-    PHASE_SMOOTHING_WINDOW_S,
+    PHASE_MIN_SMOOTH_WIN,
+    PHASE_PENALTY_FACTOR,
+    PHASE_PRE_SMOOTH_WINDOW_S,
 )
 from .profile_matcher import ProfilePhase
 
 
 def extract_phases(
     samples: list[tuple[float, float]],
-    smoothing_window_s: float = PHASE_SMOOTHING_WINDOW_S,
-    rolling_window_s: float = PHASE_ROLLING_WINDOW_S,
-    shift_pct: float = PHASE_SHIFT_PCT,
     min_duration_s: float = PHASE_MIN_DURATION_S,
+    penalty_factor: float = PHASE_PENALTY_FACTOR,
     intermittent_cov: float = PHASE_INTERMITTENT_COV,
 ) -> list[ProfilePhase]:
     """Extract phases from a completed cycle's power samples.
 
+    Uses Binary Segmentation with an L2 (variance) cost function and a
+    BIC-inspired penalty of ``penalty_factor * log(N)`` to decide whether
+    a split is worthwhile.  Each recursive call re-normalises its segment
+    to [0, 1] so that both large and subtle power transitions are detected.
+
     Args:
         samples: List of (relative_time_s, power_w) tuples.
-        smoothing_window_s: Median filter window for noise removal.
-        rolling_window_s: Rolling mean window for level detection.
-        shift_pct: Fraction of peak power that constitutes a phase shift.
-        min_duration_s: Minimum phase duration; shorter segments are merged.
-        intermittent_cov: Coefficient-of-variation threshold for intermittent classification.
+        min_duration_s: Minimum segment size in seconds (prevents tiny splits).
+        penalty_factor: Multiplier for the BIC penalty ``c * log(N)``.
+        intermittent_cov: Coefficient-of-variation threshold for classifying
+            a segment as intermittent vs constant.
 
     Returns:
         List of detected ProfilePhase objects.
@@ -51,39 +57,41 @@ def extract_phases(
         return []
 
     # Resample to a uniform 1-second grid.
-    n_seconds = max(int(total_duration), 2)
+    n_seconds = max(int(total_duration), MIN_SAMPLES)
     uniform_t = np.linspace(times[0], times[-1], n_seconds)
     uniform_p = np.interp(uniform_t, times, powers)
 
-    # Median filter to remove noise spikes.
-    smoothed = _median_filter(uniform_p, smoothing_window_s)
+    # Pre-filter: moving average to suppress transient noise.
+    smooth_win = min(PHASE_PRE_SMOOTH_WINDOW_S, n_seconds)
+    if smooth_win >= PHASE_MIN_SMOOTH_WIN:
+        kernel = np.ones(smooth_win) / smooth_win
+        smoothed = np.convolve(uniform_p, kernel, mode="same")
+    else:
+        smoothed = uniform_p.copy()
 
-    # Rolling mean for level detection.
-    rolling = _rolling_mean(smoothed, rolling_window_s)
-
-    # Detect change points based on sustained level shifts.
-    peak_power = np.max(rolling)
-    if peak_power <= 0:
+    # Flat signal => single phase.
+    lo, hi = float(np.min(smoothed)), float(np.max(smoothed))
+    if (hi - lo) < PHASE_FLAT_TOLERANCE:
         return [
             ProfilePhase(
                 name=None,
                 start_pct=0.0,
                 end_pct=1.0,
-                avg_power_w=0.0,
+                avg_power_w=float(np.mean(uniform_p)),
                 pattern="constant",
             )
         ]
 
-    shift_threshold = peak_power * shift_pct
-    change_points = _detect_change_points(rolling, shift_threshold, min_duration_s)
+    min_seg = max(MIN_SAMPLES, int(min_duration_s))
 
-    # Build segment boundaries (indices into the uniform grid).
-    boundaries = [0, *change_points, n_seconds]
+    # Recursively segment using BinSeg with local normalisation.
+    boundaries = [0]
+    _binseg_recursive(smoothed, 0, n_seconds, min_seg, penalty_factor, boundaries)
+    boundaries.append(n_seconds)
+    boundaries.sort()
 
-    # Merge segments shorter than min_duration_s.
-    boundaries = _merge_short_segments(boundaries, min_duration_s)
-
-    # Build ProfilePhase objects from segments.
+    # Build ProfilePhase objects from segments (using the *original*
+    # resampled signal, not the smoothed one, for real power stats).
     phases: list[ProfilePhase] = []
     for i in range(len(boundaries) - 1):
         start_idx = boundaries[i]
@@ -111,87 +119,66 @@ def extract_phases(
     return phases or []
 
 
-def _median_filter(data: np.ndarray, window_s: float) -> np.ndarray:
-    """Apply a simple median filter with the given window size in samples."""
-    window = max(1, int(window_s))
-    if window % 2 == 0:
-        window += 1
-    n = len(data)
-    if n <= window:
-        return data.copy()
+def _binseg_recursive(
+    smoothed: np.ndarray,
+    start: int,
+    end: int,
+    min_seg: int,
+    penalty_factor: float,
+    boundaries: list[int],
+) -> None:
+    """Binary Segmentation with local min-max normalisation per segment.
 
-    result = np.empty(n)
-    half = window // 2
-    for i in range(n):
-        lo = max(0, i - half)
-        hi = min(n, i + half + 1)
-        result[i] = np.median(data[lo:hi])
-    return result
+    After finding the best split in a segment, recurse into each half
+    with fresh normalisation so that subtle transitions within
+    low-dynamic-range regions are still detected.
+    """
+    seg_len = end - start
+    if seg_len < 2 * min_seg:
+        return
 
+    seg = smoothed[start:end]
 
-def _rolling_mean(data: np.ndarray, window_s: float) -> np.ndarray:
-    """Compute a rolling mean with the given window size in samples."""
-    window = max(1, int(window_s))
-    n = len(data)
-    if n <= window:
-        return data.copy()
+    # Local min-max normalisation.
+    lo, hi = float(np.min(seg)), float(np.max(seg))
+    span = hi - lo
+    if span < PHASE_FLAT_TOLERANCE:
+        return
+    x = (seg - lo) / span
 
-    cumsum = np.cumsum(data)
-    result = np.empty(n)
-    for i in range(n):
-        lo = max(0, i - window // 2)
-        hi = min(n, i + window // 2 + 1)
-        result[i] = (cumsum[hi - 1] - (cumsum[lo - 1] if lo > 0 else 0)) / (hi - lo)
-    return result
+    n = len(x)
+    penalty = penalty_factor * np.log(n)
 
+    # Precompute cumulative sums for O(1) segment cost queries.
+    cs_x = np.zeros(n + 1)
+    cs_x2 = np.zeros(n + 1)
+    np.cumsum(x, out=cs_x[1:])
+    np.cumsum(x**2, out=cs_x2[1:])
 
-def _detect_change_points(
-    rolling: np.ndarray,
-    shift_threshold: float,
-    min_duration_s: float,
-) -> list[int]:
-    """Find indices where the rolling mean shifts by more than the threshold."""
-    change_points: list[int] = []
-    n = len(rolling)
-    min_samples = max(1, int(min_duration_s))
+    k = np.arange(min_seg, n - min_seg + 1)
+    if len(k) == 0:
+        return
 
-    current_level = rolling[0]
-    since = 0
+    # Vectorised L2 cost for all candidate split points.
+    n1 = k
+    s1 = cs_x[k]
+    cost1 = cs_x2[k] - (s1**2) / n1
 
-    for i in range(1, n):
-        if abs(rolling[i] - current_level) > shift_threshold:
-            if i - since >= min_samples:
-                change_points.append(i)
-                current_level = rolling[i]
-                since = i
-            elif len(change_points) == 0:
-                # First segment too short; update the level reference.
-                current_level = rolling[i]
-                since = i
-        else:
-            # Level is stable; update the reference with exponential smoothing
-            # to handle gradual drift within a phase.
-            current_level = 0.95 * current_level + 0.05 * rolling[i]
+    n2 = n - k
+    s2 = cs_x[n] - cs_x[k]
+    cost2 = (cs_x2[n] - cs_x2[k]) - (s2**2) / n2
 
-    return change_points
+    total_split = cost1 + cost2
+    best_idx = int(np.argmin(total_split))
+    min_cost_split = total_split[best_idx]
+    best_k = int(k[best_idx])
 
+    # Cost of not splitting.
+    s0 = cs_x[n]
+    cost0 = cs_x2[n] - (s0**2) / n
 
-def _merge_short_segments(boundaries: list[int], min_duration_s: float) -> list[int]:
-    """Merge segments shorter than min_duration_s into their neighbors."""
-    if len(boundaries) <= 2:  # noqa: PLR2004
-        return boundaries
-
-    min_samples = max(1, int(min_duration_s))
-    merged = [boundaries[0]]
-
-    for b in boundaries[1:]:
-        if b - merged[-1] < min_samples and len(merged) > 1:
-            merged[-1] = b
-        else:
-            merged.append(b)
-
-    # Ensure the last boundary is always the end.
-    if merged[-1] != boundaries[-1]:
-        merged[-1] = boundaries[-1]
-
-    return merged
+    if (cost0 - min_cost_split) > penalty:
+        abs_k = start + best_k
+        boundaries.append(abs_k)
+        _binseg_recursive(smoothed, start, abs_k, min_seg, penalty_factor, boundaries)
+        _binseg_recursive(smoothed, abs_k, end, min_seg, penalty_factor, boundaries)

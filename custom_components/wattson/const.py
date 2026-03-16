@@ -63,11 +63,12 @@ STD_EPSILON: float = 1e-9
 
 # --- Phase extraction (static defaults, used as fallbacks) ---
 
-PHASE_SMOOTHING_WINDOW_S: float = 15.0
-PHASE_ROLLING_WINDOW_S: float = 30.0
-PHASE_SHIFT_PCT: float = 0.30
-PHASE_MIN_DURATION_S: float = 15.0
+PHASE_MIN_DURATION_S: float = 30.0
+PHASE_PENALTY_FACTOR: float = 0.3
 PHASE_INTERMITTENT_COV: float = 0.5
+PHASE_PRE_SMOOTH_WINDOW_S: int = 15
+PHASE_MIN_SMOOTH_WIN: int = 2
+PHASE_FLAT_TOLERANCE: float = 1e-6
 
 # --- Phase tracking (static defaults, used as fallbacks) ---
 
@@ -75,25 +76,44 @@ PHASE_CONFIRM_S: float = 15.0
 
 EVENT_PHASE_CHANGED = "wattson_phase_changed"
 
+# --- Entity limits ---
+
+MAX_NAME_LENGTH: int = 64
+
 # --- Config keys for options flow ---
 
 CONF_END_DELAY = "end_delay"
+
+# --- Adaptive parameter scaling ---
+# Each parameter is derived as a fraction of cycle duration, with a floor
+# to prevent degenerate values on very short cycles.
+
+ADAPTIVE_CONFIRM_FRAC: float = 0.05
+ADAPTIVE_CONFIRM_FLOOR_S: float = 5.0
+ADAPTIVE_MIN_DURATION_FRAC: float = 0.03
+ADAPTIVE_MIN_DURATION_FLOOR_S: float = 3.0
+ADAPTIVE_END_DELAY_FRAC: float = 0.10
+ADAPTIVE_END_DELAY_FLOOR_S: float = 15.0
 
 
 def adaptive_phase_params(duration_s: float) -> dict[str, float]:
     """Compute phase-detection parameters scaled to the cycle duration.
 
-    Returns sensible values for any appliance — from a 2-minute coffee
-    machine to a 4-hour 3D printer — by deriving each parameter as a
+    Returns sensible values for any appliance -- from a 2-minute coffee
+    machine to a 4-hour 3D printer -- by deriving each parameter as a
     fraction of the total cycle length, with a floor to prevent
     degenerate values on very short cycles.
     """
     return {
-        "phase_confirm_s": max(5.0, 0.05 * duration_s),
-        "rolling_window_s": max(10.0, 0.08 * duration_s),
-        "smoothing_window_s": max(5.0, 0.05 * duration_s),
-        "min_duration_s": max(3.0, 0.03 * duration_s),
-        "end_delay_s": max(15.0, 0.10 * duration_s),
+        "phase_confirm_s": max(
+            ADAPTIVE_CONFIRM_FLOOR_S, ADAPTIVE_CONFIRM_FRAC * duration_s
+        ),
+        "min_duration_s": max(
+            ADAPTIVE_MIN_DURATION_FLOOR_S, ADAPTIVE_MIN_DURATION_FRAC * duration_s
+        ),
+        "end_delay_s": max(
+            ADAPTIVE_END_DELAY_FLOOR_S, ADAPTIVE_END_DELAY_FRAC * duration_s
+        ),
     }
 
 

@@ -123,6 +123,12 @@ class SimulationEngine:
 
         if phase.phase_type == PhaseType.INTERMITTENT:
             self._power_w = self._compute_intermittent(phase)
+        elif phase.phase_type == PhaseType.RAMP:
+            self._power_w = self._compute_ramp(phase)
+        elif phase.phase_type == PhaseType.NOISY:
+            self._power_w = self._compute_noisy(phase)
+        elif phase.phase_type == PhaseType.REPLAY:
+            self._power_w = self._compute_replay(phase)
         else:
             self._power_w = self._compute_constant(phase)
 
@@ -151,6 +157,32 @@ class SimulationEngine:
             noise = random.gauss(0, phase.noise_w) if phase.noise_w > 0 else 0.0
             return max(0.0, phase.power_w + noise)
         return 0.0
+
+    def _compute_ramp(self, phase: Phase) -> float:
+        """Compute power for a linear ramp from power_w to ramp_to_w."""
+        progress = min(self._phase_elapsed_s / phase.duration_s, 1.0)
+        base = phase.power_w + (phase.ramp_to_w - phase.power_w) * progress
+        noise = random.gauss(0, phase.noise_w) if phase.noise_w > 0 else 0.0
+        return max(0.0, base + noise)
+
+    def _compute_noisy(self, phase: Phase) -> float:
+        """Compute power with high non-Gaussian noise and occasional spikes."""
+        base = phase.power_w
+        noise = (
+            random.uniform(-phase.noise_w, phase.noise_w) if phase.noise_w > 0 else 0.0
+        )
+        value = base + noise
+        if phase.spike_pct > 0 and random.random() < phase.spike_pct:
+            value += base * random.uniform(0.5, 1.5)
+        return max(0.0, value)
+
+    def _compute_replay(self, phase: Phase) -> float:
+        """Play back pre-recorded power data tick by tick."""
+        if not phase.replay_data:
+            return 0.0
+        idx = int(self._phase_elapsed_s / TICK_INTERVAL_S)
+        idx = min(idx, len(phase.replay_data) - 1)
+        return max(0.0, phase.replay_data[idx])
 
     @callback
     def _notify_sensor(self) -> None:

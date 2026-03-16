@@ -1,6 +1,8 @@
-"""Unit tests for the phase extraction algorithm."""
+"""Unit tests for the BinSeg phase extraction algorithm."""
 
 from __future__ import annotations
+
+import random
 
 import pytest
 
@@ -153,3 +155,145 @@ class TestPhaseAttributes:
             assert restored.avg_power_w == phase.avg_power_w
             assert restored.pattern == phase.pattern
             assert restored.marks_cycle_done == phase.marks_cycle_done
+
+
+# ---------------------------------------------------------------------------
+# Realistic signal helpers
+# ---------------------------------------------------------------------------
+
+
+def _ramp_samples(
+    start_w: float,
+    end_w: float,
+    duration_s: float,
+    noise_w: float = 0.0,
+    start_s: float = 0.0,
+    step_s: float = 1.0,
+) -> list[tuple[float, float]]:
+    """Generate a linear ramp from start_w to end_w with optional noise."""
+    samples: list[tuple[float, float]] = []
+    t = start_s
+    n_steps = int(duration_s / step_s)
+    for i in range(n_steps + 1):
+        progress = i / max(n_steps, 1)
+        power = start_w + (end_w - start_w) * progress
+        if noise_w > 0:
+            power += random.gauss(0, noise_w)
+        samples.append((t, max(0.0, power)))
+        t += step_s
+    return samples
+
+
+def _noisy_samples(
+    power_w: float,
+    duration_s: float,
+    noise_w: float,
+    spike_pct: float = 0.0,
+    start_s: float = 0.0,
+    step_s: float = 1.0,
+) -> list[tuple[float, float]]:
+    """Generate constant power with high uniform noise and random spikes."""
+    samples: list[tuple[float, float]] = []
+    t = start_s
+    while t <= start_s + duration_s:
+        value = power_w + random.uniform(-noise_w, noise_w)
+        if spike_pct > 0 and random.random() < spike_pct:
+            value += power_w * random.uniform(0.5, 1.5)
+        samples.append((t, max(0.0, value)))
+        t += step_s
+    return samples
+
+
+def _gradual_transition_samples(
+    phases: list[tuple[float, float, float]],
+    transition_s: float = 10.0,
+    step_s: float = 1.0,
+) -> list[tuple[float, float]]:
+    """Generate multi-phase signal with gradual transitions between levels.
+
+    phases: list of (power_w, duration_s, noise_w) tuples.
+    transition_s: ramp duration between adjacent phases.
+    """
+    samples: list[tuple[float, float]] = []
+    t = 0.0
+    for idx, (power_w, duration_s, noise_w) in enumerate(phases):
+        end_t = t + duration_s
+        while t < end_t:
+            noise = random.gauss(0, noise_w) if noise_w > 0 else 0.0
+            samples.append((t, max(0.0, power_w + noise)))
+            t += step_s
+        if idx < len(phases) - 1:
+            next_power = phases[idx + 1][0]
+            ramp = _ramp_samples(
+                power_w, next_power, transition_s, noise_w, start_s=t, step_s=step_s
+            )
+            samples.extend(ramp)
+            t += transition_s + step_s
+    return samples
+
+
+class TestRealisticSignals:
+    """Test phase extraction on realistic, noisy, and ramping signals."""
+
+    def test_ramp_up_then_constant(self) -> None:
+        """A gradual ramp from 0 to 2000W then steady 2000W should detect at least 2 phases."""
+        random.seed(100)
+        ramp = _ramp_samples(0.0, 2000.0, 120.0, noise_w=30.0)
+        steady = _constant_samples(2000.0, 300.0, start_s=121.0)
+        samples = ramp + steady
+        phases = extract_phases(samples, min_duration_s=20.0)
+        assert len(phases) >= 2
+
+    def test_gradual_three_phase_transition(self) -> None:
+        """Three phases connected by gradual 10s ramps should still detect 3 phases."""
+        random.seed(101)
+        samples = _gradual_transition_samples(
+            [
+                (2000.0, 200.0, 40.0),
+                (500.0, 200.0, 20.0),
+                (100.0, 200.0, 10.0),
+            ],
+            transition_s=15.0,
+        )
+        phases = extract_phases(samples, min_duration_s=20.0)
+        assert len(phases) >= 3
+
+    def test_high_noise_two_phases(self) -> None:
+        """Two phases with 40% noise should still be distinguishable."""
+        random.seed(102)
+        noisy_high = _noisy_samples(2000.0, 300.0, noise_w=800.0, start_s=0.0)
+        noisy_low = _noisy_samples(200.0, 300.0, noise_w=80.0, start_s=301.0)
+        samples = noisy_high + noisy_low
+        phases = extract_phases(samples, min_duration_s=30.0)
+        assert len(phases) >= 2
+
+    def test_similar_adjacent_phases(self) -> None:
+        """Phases at 800W, 600W, 450W (25-33% difference) should be detected."""
+        random.seed(103)
+        samples = _multi_phase_samples(
+            [
+                (800.0, 300.0),
+                (600.0, 300.0),
+                (450.0, 300.0),
+            ]
+        )
+        phases = extract_phases(samples, min_duration_s=30.0)
+        assert len(phases) >= 3
+
+    def test_transient_spikes_no_oversegmentation(self) -> None:
+        """Spikes should not cause extra phase splits in a single constant phase."""
+        random.seed(104)
+        samples = _noisy_samples(500.0, 600.0, noise_w=100.0, spike_pct=0.10)
+        phases = extract_phases(samples, min_duration_s=30.0)
+        assert len(phases) <= 2, (
+            f"Expected at most 2 phases for a single noisy phase, got {len(phases)}"
+        )
+
+    def test_ramp_down_detected(self) -> None:
+        """A ramp from 2000W down to 200W followed by a constant phase."""
+        random.seed(105)
+        ramp_down = _ramp_samples(2000.0, 200.0, 180.0, noise_w=30.0)
+        steady_low = _constant_samples(200.0, 300.0, start_s=181.0)
+        samples = ramp_down + steady_low
+        phases = extract_phases(samples, min_duration_s=20.0)
+        assert len(phases) >= 2

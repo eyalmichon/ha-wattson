@@ -17,10 +17,12 @@ from pytest_homeassistant_custom_component.common import (
 )
 
 from custom_components.wattson.const import (
+    ADAPTIVE_END_DELAY_FRAC,
     CONF_ENTITY_ID,
     CONF_SOURCE_TYPE,
     CONF_START_THRESHOLD,
     SOURCE_ENTITY,
+    CycleState,
 )
 from custom_components.wattson.const import DOMAIN as WATTSON_DOMAIN
 from custom_components.wattson_simulator.const import DOMAIN as SIM_DOMAIN
@@ -93,9 +95,19 @@ class WattsonTestContext:
             await self.hass.async_block_till_done()
             elapsed += step
 
-    async def run_full_cycle(
-        self, program_key: str, end_buffer: float | None = None
-    ) -> None:
+    async def advance_to_off(self, max_wait: float = 600.0) -> None:
+        """Advance time until the detector reaches OFF, up to *max_wait* seconds."""
+        waited = 0.0
+        step = 5.0
+        while self.coordinator.detector.state != CycleState.OFF and waited < max_wait:
+            await self.advance(step)
+            waited += step
+        assert self.coordinator.detector.state == CycleState.OFF, (
+            f"Detector did not reach OFF within {max_wait}s "
+            f"(stuck in {self.coordinator.detector.state})"
+        )
+
+    async def run_full_cycle(self, program_key: str) -> None:
         """Select a program, start the simulator, advance through the full cycle."""
         self.engine.set_program(program_key)
         self.engine.start()
@@ -103,9 +115,10 @@ class WattsonTestContext:
 
         program = PROGRAMS[program_key]
         total_duration = sum(p.duration_s for p in program.phases)
-        if end_buffer is None:
-            end_buffer = max(80, total_duration * 0.15)
-        await self.advance(total_duration + end_buffer)
+        await self.advance(total_duration)
+        # Budget: adaptive end_delay (10% of duration) + margin for slow tests.
+        off_budget = ADAPTIVE_END_DELAY_FRAC * total_duration + 120
+        await self.advance_to_off(max_wait=off_budget)
 
     async def set_sensor(self, state: str) -> None:
         """Manually set the power sensor state."""

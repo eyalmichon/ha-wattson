@@ -111,7 +111,7 @@ def _resolve_profile(
 
 def _validate_phase_index(profile: Profile, phase_index: int) -> None:
     """Raise if phase_index is out of bounds for the profile."""
-    if not profile.phases or phase_index >= len(profile.phases):
+    if not profile.phases or phase_index < 0 or phase_index >= len(profile.phases):
         msg = f"Phase index {phase_index} out of range"
         raise ServiceValidationError(msg)
 

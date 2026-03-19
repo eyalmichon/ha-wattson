@@ -395,7 +395,7 @@ class TestProfileMatcherBoundaries:
             cycle_count=1,
             last_updated=0.0,
         )
-        remaining, _corr, _progress = matcher.estimate_remaining(
+        remaining, _corr, _progress, _raw = matcher.estimate_remaining(
             [(0.0, 100.0), (1.0, 100.0)], profile
         )
         assert remaining is None

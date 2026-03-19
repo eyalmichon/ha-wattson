@@ -46,6 +46,7 @@ class WattsonProfileSelect(WattsonEntity, SelectEntity):
     def __init__(self, coordinator: WattsonCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator, entry, "profile_select")
         self._siblings: list[object] = []
+        self._option_to_profile_id: dict[str, str] = {}
         self._attr_options = self._build_options()
         self._attr_current_option = (
             self._attr_options[0] if self._attr_options else None
@@ -56,13 +57,10 @@ class WattsonProfileSelect(WattsonEntity, SelectEntity):
         """Return the currently selected Profile object, or None."""
         if not self._attr_current_option:
             return None
-        for i, opt in enumerate(self._attr_options):
-            if opt == self._attr_current_option:
-                profiles = self.coordinator.store.profiles
-                if i < len(profiles):
-                    return profiles[i]
-                return None
-        return None
+        profile_id = self._option_to_profile_id.get(self._attr_current_option)
+        if profile_id is None:
+            return None
+        return self.coordinator.store.get_profile(profile_id)
 
     def register_sibling(self, entity: object) -> None:
         """Register a sibling entity to notify on selection changes."""
@@ -72,10 +70,13 @@ class WattsonProfileSelect(WattsonEntity, SelectEntity):
         """Build the options list from stored profiles."""
         profiles = self.coordinator.store.profiles
         options: list[str] = []
+        self._option_to_profile_id = {}
         for idx, p in enumerate(profiles, start=1):
             duration_min = round(p.avg_duration_s / 60, 1)
             label = p.name or f"Program #{idx}"
-            options.append(f"{label} (~{duration_min} min)")
+            option = f"{label} (~{duration_min} min)"
+            options.append(option)
+            self._option_to_profile_id[option] = p.id
         return options
 
     def _notify_siblings(self) -> None:
@@ -88,10 +89,11 @@ class WattsonProfileSelect(WattsonEntity, SelectEntity):
         """Rebuild options after profiles change (add/rename/delete)."""
         old_selection = self._attr_current_option
         self._attr_options = self._build_options()
-        if old_selection not in self._attr_options:
-            self._attr_current_option = (
-                self._attr_options[0] if self._attr_options else None
-            )
+        default_option = self._attr_options[0] if self._attr_options else None
+        if old_selection in self._attr_options:
+            self._attr_current_option = old_selection
+        else:
+            self._attr_current_option = default_option
         self._notify_siblings()
 
     async def async_select_option(self, option: str) -> None:
@@ -131,6 +133,7 @@ class WattsonPhaseSelect(WattsonEntity, SelectEntity):
         super().__init__(coordinator, entry, "phase_select")
         self._profile_select = profile_select
         self._siblings: list[object] = []
+        self._option_to_phase_idx: dict[str, int] = {}
         self._attr_options = self._build_options()
         self._attr_current_option = (
             self._attr_options[0] if self._attr_options else None
@@ -142,10 +145,10 @@ class WattsonPhaseSelect(WattsonEntity, SelectEntity):
         profile = self._profile_select.selected_profile
         if profile is None or not profile.phases or not self._attr_current_option:
             return None
-        for i, opt in enumerate(self._attr_options):
-            if opt == self._attr_current_option and i < len(profile.phases):
-                return profile, i, profile.phases[i]
-        return None
+        idx = self._option_to_phase_idx.get(self._attr_current_option)
+        if idx is None or idx >= len(profile.phases):
+            return None
+        return profile, idx, profile.phases[idx]
 
     def register_sibling(self, entity: object) -> None:
         """Register a sibling entity to notify on selection changes."""
@@ -153,13 +156,16 @@ class WattsonPhaseSelect(WattsonEntity, SelectEntity):
 
     def _build_options(self) -> list[str]:
         """Build phase options from the selected profile."""
+        self._option_to_phase_idx = {}
         profile = self._profile_select.selected_profile
         if profile is None or not profile.phases:
             return []
         options: list[str] = []
         for i, phase in enumerate(profile.phases):
             label = phase.name or f"Phase {i + 1}"
-            options.append(f"{label} (~{round(phase.avg_power_w)}W)")
+            option = f"{label} (~{round(phase.avg_power_w)}W)"
+            options.append(option)
+            self._option_to_phase_idx[option] = i
         return options
 
     def _notify_siblings(self) -> None:
@@ -177,23 +183,18 @@ class WattsonPhaseSelect(WattsonEntity, SelectEntity):
         old_options = self._attr_options
         old_selection = self._attr_current_option
         self._attr_options = self._build_options()
+        default_option = self._attr_options[0] if self._attr_options else None
 
         if old_selection in self._attr_options:
-            pass
-        elif old_selection and old_options:
-            old_idx = next(
-                (i for i, o in enumerate(old_options) if o == old_selection), None
-            )
-            if old_idx is not None and old_idx < len(self._attr_options):
+            self._attr_current_option = old_selection
+        elif old_selection and old_selection in old_options:
+            old_idx = old_options.index(old_selection)
+            if old_idx < len(self._attr_options):
                 self._attr_current_option = self._attr_options[old_idx]
             else:
-                self._attr_current_option = (
-                    self._attr_options[0] if self._attr_options else None
-                )
+                self._attr_current_option = default_option
         else:
-            self._attr_current_option = (
-                self._attr_options[0] if self._attr_options else None
-            )
+            self._attr_current_option = default_option
         self._notify_siblings()
 
     async def async_select_option(self, option: str) -> None:

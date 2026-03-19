@@ -326,12 +326,12 @@ async def test_anti_wrinkle_cycle_ends(e2e: WattsonTestContext) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 13. Cycle end delay is fast (~30s, not 180s)
+# 13. Cycle ends promptly after appliance stops
 # ---------------------------------------------------------------------------
 
 
-async def test_cycle_end_delay_is_fast(e2e: WattsonTestContext) -> None:
-    """After simulator stops, the detector should go OFF within ~40s, not 180s."""
+async def test_cycle_ends_after_appliance_stops(e2e: WattsonTestContext) -> None:
+    """After simulator stops, the detector should eventually reach OFF."""
     e2e.engine.set_program("quick_dry")
     e2e.engine.start()
     await e2e.hass.async_block_till_done()
@@ -342,15 +342,7 @@ async def test_cycle_end_delay_is_fast(e2e: WattsonTestContext) -> None:
     e2e.engine.stop()
     await e2e.hass.async_block_till_done()
 
-    t_before = e2e.t
-    for _ in range(30):
-        await e2e.advance(2)
-        if e2e.coordinator.detector.state.value == "off":
-            break
-
-    elapsed = e2e.t - t_before
-    assert e2e.coordinator.detector.state.value == "off"
-    assert elapsed <= 50, f"End delay took {elapsed}s, expected <= 50s"
+    await e2e.advance_to_off()
 
 
 # ---------------------------------------------------------------------------
@@ -567,3 +559,26 @@ async def test_mark_phase_done_via_switch(e2e: WattsonTestContext) -> None:
 
     switch_state = hass.states.get("switch.dryer_profile_phase_done")
     assert switch_state.state == "on"
+
+
+# ---------------------------------------------------------------------------
+# 22. Anti-wrinkle tail does NOT split cycle
+# ---------------------------------------------------------------------------
+
+
+async def test_antiwrinkle_no_cycle_split(e2e: WattsonTestContext) -> None:
+    """A dryer cycle with anti-wrinkle tail must produce exactly one profile.
+
+    The fixture simulates: 60s main cycle at ~2000W, 2-min gap at 0W,
+    then 5 min of intermittent 50-70W anti-wrinkle pulses.  The tumbles
+    are too short/low-energy to pass the minimum cycle thresholds, so
+    only the main cycle creates a profile.
+    """
+    await e2e.run_full_cycle("dryer_antiwrinkle")
+
+    assert e2e.coordinator.detector.state.value == "off"
+    assert len(e2e.coordinator.store.profiles) == 1, (
+        f"Expected 1 profile, got {len(e2e.coordinator.store.profiles)} "
+        "(cycle split during anti-wrinkle gap)"
+    )
+    assert len(e2e.coordinator.store.cycles) == 1

@@ -204,7 +204,9 @@ class TestTimeEstimation:
         # Partial curve: first ~half of the wash cycle
         partial = WASH_SAMPLES[:6]  # up to t=50
 
-        remaining, corr, progress = matcher.estimate_remaining(partial, profile)
+        remaining, corr, progress, _raw_corr = matcher.estimate_remaining(
+            partial, profile
+        )
         assert remaining is not None
         assert corr >= 0.5
         assert 0.0 < progress <= 1.0
@@ -213,12 +215,14 @@ class TestTimeEstimation:
 
     def test_empty_partial_returns_none(self, matcher: ProfileMatcher) -> None:
         profile = _make_profile(WASH_SAMPLES)
-        remaining, _corr, _progress = matcher.estimate_remaining([], profile)
+        remaining, _corr, _progress, _raw = matcher.estimate_remaining([], profile)
         assert remaining is None
 
     def test_full_curve_returns_near_zero(self, matcher: ProfileMatcher) -> None:
         profile = _make_profile(WASH_SAMPLES, avg_duration_s=100.0)
-        remaining, _corr, progress = matcher.estimate_remaining(WASH_SAMPLES, profile)
+        remaining, _corr, progress, _raw = matcher.estimate_remaining(
+            WASH_SAMPLES, profile
+        )
         assert remaining is not None
         assert remaining <= 15.0
         assert progress >= 0.85
@@ -228,8 +232,8 @@ class TestTimeEstimation:
         profile = _make_profile(WASH_SAMPLES, avg_duration_s=100.0)
         partial = WASH_SAMPLES[:6]
 
-        _, _, progress1 = matcher.estimate_remaining(partial, profile)
-        _, _, progress2 = matcher.estimate_remaining(partial, profile)
+        _, _, progress1, _ = matcher.estimate_remaining(partial, profile)
+        _, _, progress2, _ = matcher.estimate_remaining(partial, profile)
         assert progress2 >= progress1
 
     def test_too_early_returns_none(self, matcher: ProfileMatcher) -> None:
@@ -237,10 +241,11 @@ class TestTimeEstimation:
         profile = _make_profile(WASH_SAMPLES, avg_duration_s=100.0)
         # Only first 2 samples spanning 10s out of 100s = 10% — right at the threshold
         tiny_partial = WASH_SAMPLES[:2]
-        _remaining, _corr, _progress = matcher.estimate_remaining(tiny_partial, profile)
-        # At exactly 10% it may or may not pass, but below should fail
+        _remaining, _corr, _progress, _ = matcher.estimate_remaining(
+            tiny_partial, profile
+        )
         sub_threshold = [(0, 5), (5, 500)]  # 5s out of 100s = 5%
-        remaining2, _, _ = matcher.estimate_remaining(sub_threshold, profile)
+        remaining2, _, _, _ = matcher.estimate_remaining(sub_threshold, profile)
         assert remaining2 is None
 
 

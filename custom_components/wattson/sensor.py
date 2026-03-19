@@ -132,6 +132,7 @@ class WattsonProgramSensor(WattsonBaseSensor):
         attrs: dict[str, object] = {
             "profile_id": result.profile_id,
             "correlation": round(result.correlation, 3),
+            "match_score": round(result.score, 3),
         }
         if result.dtw_distance is not None:
             attrs["dtw_distance"] = round(result.dtw_distance, 1)

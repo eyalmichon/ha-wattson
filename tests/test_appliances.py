@@ -283,6 +283,37 @@ async def test_realistic_appliance_phase_count(
 
 
 # ---------------------------------------------------------------------------
+# Ghost cycle rejection: anti-wrinkle tumbles should not create profiles
+# ---------------------------------------------------------------------------
+
+
+async def test_antiwrinkle_no_ghost_profiles(
+    appliance_ctx: WattsonTestContext,
+) -> None:
+    """Anti-wrinkle tumbles after the main cycle must not create ghost profiles.
+
+    The dryer_antiwrinkle program has a 60s main cycle at 2000W, then silence,
+    then low-power intermittent tumbles.  Only the main cycle should produce
+    a stored profile; the tumbles are too short/low-energy to qualify.
+    """
+    ctx = appliance_ctx
+
+    await ctx.run_full_cycle("dryer_antiwrinkle")
+
+    assert ctx.coordinator.detector.state.value == "off"
+
+    profiles = ctx.coordinator.store.profiles
+    assert len(profiles) == 1, (
+        f"Expected 1 profile (main cycle only), got {len(profiles)}: "
+        f"{[(p.avg_duration_s, p.avg_energy_wh) for p in profiles]}"
+    )
+
+    profile = profiles[0]
+    assert profile.avg_energy_wh > 5.0, "Main cycle energy should exceed threshold"
+    assert profile.avg_duration_s > 30.0, "Main cycle duration should exceed threshold"
+
+
+# ---------------------------------------------------------------------------
 # Stress-test programs: gradual ramps, high noise, similar phases, spikes
 # ---------------------------------------------------------------------------
 

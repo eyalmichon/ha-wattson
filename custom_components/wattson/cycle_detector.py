@@ -29,7 +29,7 @@ class CycleDetectorConfig:
 class CycleDetector:
     """State machine that detects appliance on/off cycles from power readings.
 
-    Three states: OFF -> STARTING -> RUNNING -> OFF.
+    States: OFF -> STARTING -> RUNNING -> OFF.
     Pure logic — no Home Assistant dependencies.
     """
 
@@ -44,6 +44,8 @@ class CycleDetector:
         self._cycle_energy_wh: float = 0.0
 
         self._low_power_since: float | None = None
+
+    # --- Public properties ---
 
     @property
     def state(self) -> CycleState:
@@ -65,7 +67,8 @@ class CycleDetector:
 
         Returns the new state after processing.
         """
-        self._accumulate_energy(power_w, timestamp)
+        if self._state != CycleState.OFF:
+            self._accumulate_energy(power_w, timestamp)
 
         match self._state:
             case CycleState.OFF:
@@ -78,6 +81,10 @@ class CycleDetector:
         self._last_power = power_w
         self._last_timestamp = timestamp
         return self._state
+
+    def update_end_delay(self, end_delay_s: float) -> None:
+        """Update the end-delay dynamically (e.g. from adaptive params)."""
+        self._config.end_delay_s = end_delay_s
 
     # --- State handlers ---
 
@@ -105,13 +112,12 @@ class CycleDetector:
 
     def _handle_running(self, power_w: float, timestamp: float) -> None:
         if power_w < self._config.off_threshold_w:
-            self._track_low_power(timestamp)
-            if self._low_power_elapsed(timestamp) >= self._config.end_delay_s:
+            if self._low_power_since is None:
+                self._low_power_since = timestamp
+            elif timestamp - self._low_power_since >= self._config.end_delay_s:
                 self._reset()
-            return
-
-        # Power is at or above off threshold — appliance is active.
-        self._low_power_since = None
+        else:
+            self._low_power_since = None
 
     # --- Helpers ---
 
@@ -124,19 +130,6 @@ class CycleDetector:
                 power_w,
                 timestamp,
             )
-
-    def _track_low_power(self, timestamp: float) -> None:
-        if self._low_power_since is None:
-            self._low_power_since = timestamp
-
-    def _low_power_elapsed(self, timestamp: float) -> float:
-        if self._low_power_since is None:
-            return 0.0
-        return timestamp - self._low_power_since
-
-    def update_end_delay(self, end_delay_s: float) -> None:
-        """Update the end-delay dynamically (e.g. from adaptive params)."""
-        self._config.end_delay_s = end_delay_s
 
     def _reset(self) -> None:
         self._state = CycleState.OFF

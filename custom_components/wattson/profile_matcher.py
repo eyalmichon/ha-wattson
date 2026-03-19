@@ -126,6 +126,7 @@ class MatchResult:
     profile_name: str | None
     correlation: float
     dtw_distance: float | None
+    score: float = 0.0
 
 
 def _resample(samples: list[tuple[float, float]], n_points: int) -> np.ndarray:
@@ -140,22 +141,29 @@ def _resample(samples: list[tuple[float, float]], n_points: int) -> np.ndarray:
 
 def _correlation(a: np.ndarray, b: np.ndarray) -> float:
     """Pearson correlation between two equal-length arrays."""
-    if np.std(a) < STD_EPSILON or np.std(b) < STD_EPSILON:
-        # Flat signals — correlation is undefined; treat as no match.
+    std_a, std_b = float(np.std(a)), float(np.std(b))
+    if std_a < STD_EPSILON or std_b < STD_EPSILON:
         return 0.0
-    return float(np.corrcoef(a, b)[0, 1])
+    return float(np.mean((a - np.mean(a)) * (b - np.mean(b))) / (std_a * std_b))
 
 
 def _dtw_distance(a: np.ndarray, b: np.ndarray) -> float:
-    """Dynamic Time Warping distance (pure numpy, no extra deps)."""
+    """Dynamic Time Warping distance with Sakoe-Chiba band (pure numpy)."""
     n, m = len(a), len(b)
+    window = max(max(n, m) // 4, abs(n - m))
+
     cost = np.full((n + 1, m + 1), np.inf)
     cost[0, 0] = 0.0
 
+    dist = np.abs(a[:, None] - b[None, :])
+
     for i in range(1, n + 1):
-        for j in range(1, m + 1):
-            d = abs(float(a[i - 1]) - float(b[j - 1]))
-            cost[i, j] = d + min(cost[i - 1, j], cost[i, j - 1], cost[i - 1, j - 1])
+        j_lo = max(1, i - window)
+        j_hi = min(m, i + window)
+        for j in range(j_lo, j_hi + 1):
+            cost[i, j] = dist[i - 1, j - 1] + min(
+                cost[i - 1, j], cost[i, j - 1], cost[i - 1, j - 1]
+            )
 
     return float(cost[n, m]) / max(n, m)
 
@@ -191,6 +199,22 @@ def _merge_phases(
         else:
             merged.append(phase)
     return merged
+
+
+def _build_match_result(
+    profile: Profile,
+    correlation: float,
+    score: float,
+    dtw_distance: float | None = None,
+) -> MatchResult:
+    """Construct a MatchResult with consistent field mapping."""
+    return MatchResult(
+        profile_id=profile.id,
+        profile_name=profile.name,
+        correlation=correlation,
+        dtw_distance=dtw_distance,
+        score=score,
+    )
 
 
 class ProfileMatcher:
@@ -234,18 +258,17 @@ class ProfileMatcher:
             prof_curve = _resample(profile.samples, self._n_points)
             corr = _correlation(cycle_curve, prof_curve)
 
-            # Power level similarity: 1.0 when means match, 0.0 when very different.
-            ref_power = max(cycle_mean, float(np.mean(prof_curve)), 1.0)
+            prof_mean = float(np.mean(prof_curve))
+            ref_power = max(cycle_mean, prof_mean, 1.0)
             level_sim = max(
                 0.0,
-                1.0 - abs(cycle_mean - float(np.mean(prof_curve))) / ref_power,
+                1.0 - abs(cycle_mean - prof_mean) / ref_power,
             )
 
             # Duration similarity: 1.0 when durations match, 0.0 when 2x+ different.
-            dur_ratio = min(cycle.duration_s, profile.avg_duration_s) / max(
+            dur_sim = min(cycle.duration_s, profile.avg_duration_s) / max(
                 cycle.duration_s, profile.avg_duration_s, 1.0
             )
-            dur_sim = max(0.0, dur_ratio)
 
             shape = max(corr, 0.0)
             score = (
@@ -254,36 +277,18 @@ class ProfileMatcher:
                 + MATCH_DURATION_WEIGHT * dur_sim
             )
 
-            # Fast path: high correlation alone is sufficient.
             if corr >= self._corr_threshold:
                 if score > best_score:
                     best_score = score
-                    best = MatchResult(
-                        profile_id=profile.id,
-                        profile_name=profile.name,
-                        correlation=corr,
-                        dtw_distance=None,
-                    )
-            # DTW tiebreaker for ambiguous correlation.
+                    best = _build_match_result(profile, corr, score)
             elif corr >= self._corr_ambiguous:
                 dtw = _dtw_distance(cycle_curve, prof_curve)
                 if dtw <= self._dtw_threshold and score > best_score:
                     best_score = score
-                    best = MatchResult(
-                        profile_id=profile.id,
-                        profile_name=profile.name,
-                        correlation=corr,
-                        dtw_distance=dtw,
-                    )
-            # Combined score can still match flat signals with low correlation.
+                    best = _build_match_result(profile, corr, score, dtw)
             elif score >= MATCH_SCORE_THRESHOLD and score > best_score:
                 best_score = score
-                best = MatchResult(
-                    profile_id=profile.id,
-                    profile_name=profile.name,
-                    correlation=corr,
-                    dtw_distance=None,
-                )
+                best = _build_match_result(profile, corr, score)
 
         return best
 
@@ -291,7 +296,7 @@ class ProfileMatcher:
         self,
         partial: list[tuple[float, float]],
         profile: Profile,
-    ) -> tuple[float | None, float, float]:
+    ) -> tuple[float | None, float, float, float]:
         """Estimate time remaining given a partial power curve and a matched profile.
 
         Uses elapsed time for the estimate and correlation for scoring how
@@ -303,29 +308,25 @@ class ProfileMatcher:
             profile: The profile to estimate against.
 
         Returns:
-            (remaining_seconds | None, match_score, progress_fraction).
-            Returns (None, 0.0, 0.0) when estimation is not possible.
+            (remaining_seconds | None, score, progress, raw_correlation).
+            Returns (None, 0.0, 0.0, 0.0) when estimation is not possible.
         """
         if not partial or len(profile.samples) < MIN_SAMPLES:
-            return None, 0.0, 0.0
+            return None, 0.0, 0.0, 0.0
 
         profile_duration = profile.avg_duration_s
         if profile_duration <= 0:
-            return None, 0.0, 0.0
+            return None, 0.0, 0.0, 0.0
 
         partial_duration = partial[-1][0] - partial[0][0]
 
-        # Don't estimate until we have a meaningful fraction of the cycle.
-        frac = partial_duration / profile_duration if profile_duration else 0.0
+        frac = partial_duration / profile_duration
         if frac < ESTIMATE_MIN_PARTIAL_FRAC:
-            return None, 0.0, 0.0
+            return None, 0.0, 0.0, 0.0
 
-        # Time-based progress and remaining (simple, stable, monotonic).
         progress = min(frac, 1.0)
         remaining = max(0.0, profile_duration - partial_duration)
 
-        # Compute a match score so the caller can choose the best profile.
-        # Resample the partial to align with the expected profile segment.
         profile_curve = _resample(profile.samples, self._n_points)
         window_size = max(MIN_SAMPLES, round(self._n_points * progress))
         window_size = min(window_size, self._n_points)
@@ -338,10 +339,11 @@ class ProfileMatcher:
         corr = _correlation(partial_curve, window)
 
         ref_power = max(float(np.mean(np.abs(profile_curve))), 1.0)
+        partial_mean = float(np.mean(partial_curve))
+        window_mean = float(np.mean(window))
         level_sim = max(
             0.0,
-            1.0
-            - abs(float(np.mean(partial_curve)) - float(np.mean(window))) / ref_power,
+            1.0 - abs(partial_mean - window_mean) / ref_power,
         )
 
         if corr > STD_EPSILON:
@@ -352,9 +354,9 @@ class ProfileMatcher:
             score = level_sim
 
         if score < ESTIMATE_MIN_CORRELATION:
-            return None, score, 0.0
+            return None, score, 0.0, corr
 
-        return remaining, score, progress
+        return remaining, score, progress, corr
 
     def create_profile(
         self,

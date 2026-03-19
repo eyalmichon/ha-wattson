@@ -47,10 +47,9 @@ async def test_power_outage_sensor_unavailable(ctx: WattsonTestContext) -> None:
     ctx.engine.stop()
     await ctx.set_sensor(STATE_UNAVAILABLE)
 
-    # The coordinator should feed 0W; after end_delay, cycle ends.
-    await ctx.advance(80)
+    # The coordinator feeds 0W; after trailing energy clears + R_commit, cycle ends.
+    await ctx.advance_to_off()
 
-    assert ctx.coordinator.detector.state == CycleState.OFF
     assert ctx.coordinator.time_remaining is None
 
 
@@ -60,7 +59,7 @@ async def test_power_outage_sensor_unavailable(ctx: WattsonTestContext) -> None:
 
 
 async def test_door_open_sudden_stop(ctx: WattsonTestContext) -> None:
-    """Sudden power drop to 0 should end the cycle after end_delay."""
+    """Sudden power drop to 0 should end the cycle after end_delay + R_commit."""
     ctx.engine.set_program("normal_dry")
     ctx.engine.start()
     await ctx.hass.async_block_till_done()
@@ -71,9 +70,8 @@ async def test_door_open_sudden_stop(ctx: WattsonTestContext) -> None:
     # Simulate door open: power drops to 0.
     ctx.engine.stop()
     await ctx.set_sensor("0")
-    await ctx.advance(80)
+    await ctx.advance_to_off()
 
-    assert ctx.coordinator.detector.state == CycleState.OFF
     # Phase tracking should be reset.
     assert (
         ctx.coordinator.current_phase_name is None
@@ -116,7 +114,7 @@ async def test_brief_power_dip_continues(ctx: WattsonTestContext) -> None:
 
 
 async def test_long_pause_new_cycle(ctx: WattsonTestContext) -> None:
-    """A pause longer than end_delay ends the cycle; resuming starts a new one."""
+    """A pause longer than end_delay + R_commit ends the cycle; resuming starts a new one."""
     ctx.engine.set_program("normal_dry")
     ctx.engine.start()
     await ctx.hass.async_block_till_done()
@@ -127,9 +125,7 @@ async def test_long_pause_new_cycle(ctx: WattsonTestContext) -> None:
     # Long pause: cycle ends.
     ctx.engine.stop()
     await ctx.set_sensor("0")
-    await ctx.advance(80)
-
-    assert ctx.coordinator.detector.state == CycleState.OFF
+    await ctx.advance_to_off()
 
     # Resume — starts a new cycle.
     await ctx.set_sensor("2000")
@@ -157,9 +153,7 @@ async def test_sensor_reports_unknown_mid_cycle(ctx: WattsonTestContext) -> None
 
     ctx.engine.stop()
     await ctx.set_sensor(STATE_UNKNOWN)
-    await ctx.advance(80)
-
-    assert ctx.coordinator.detector.state == CycleState.OFF
+    await ctx.advance_to_off()
 
 
 # ---------------------------------------------------------------------------
@@ -206,9 +200,7 @@ async def test_cycle_longer_than_profile(ctx: WattsonTestContext) -> None:
         assert tr >= 0, f"time_remaining went negative: {tr}"
 
     ctx.engine.stop()
-    await ctx.advance(80)
-
-    assert ctx.coordinator.detector.state == CycleState.OFF
+    await ctx.advance_to_off()
 
 
 # ---------------------------------------------------------------------------
@@ -233,9 +225,7 @@ async def test_aborted_cycle_no_profile_corruption(ctx: WattsonTestContext) -> N
     await ctx.advance(10)
     ctx.engine.stop()
     await ctx.set_sensor("0")
-    await ctx.advance(80)
-
-    assert ctx.coordinator.detector.state == CycleState.OFF
+    await ctx.advance_to_off()
 
     # The short aborted cycle should be discarded (too short).
     profile_after = ctx.coordinator.store.profiles[0]

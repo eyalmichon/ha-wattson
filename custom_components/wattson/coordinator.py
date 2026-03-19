@@ -28,8 +28,10 @@ from .const import (
     DEFAULT_START_THRESHOLD_W,
     ESTIMATE_SMOOTH_ALPHA,
     ESTIMATE_SMOOTH_THRESHOLD_S,
+    ESTIMATE_THROTTLE_S,
     EVENT_PHASE_CHANGED,
     MIN_CYCLE_DURATION_S,
+    MIN_CYCLE_ENERGY_WH,
     MIN_SAMPLES,
     SOURCE_MQTT,
     CycleState,
@@ -104,6 +106,8 @@ class WattsonCoordinator:
         self.match_result: MatchResult | None = None
         self.time_remaining: float | None = None
         self._recording = False
+
+        self._last_estimate_time: float = 0.0
 
         # Phase tracking state.
         self.current_phase_index: int | None = None
@@ -199,11 +203,32 @@ class WattsonCoordinator:
         """Start listening for power updates."""
         await self.store.async_load()
 
+        # Seed adaptive end_delay from stored profiles so the first cycle
+        # after a restart benefits from previously learned durations.
+        self._seed_adaptive_end_delay()
+
         source_type = self.entry.data.get(CONF_SOURCE_TYPE)
         if source_type == SOURCE_MQTT:
             await self._setup_mqtt()
         else:
             self._setup_entity_listener()
+
+    def _seed_adaptive_end_delay(self) -> None:
+        """Set detector's end_delay from the longest stored profile."""
+        if self._user_end_delay is not None:
+            return
+        best_duration = max(
+            (p.avg_duration_s for p in self.store.profiles), default=0.0
+        )
+        if best_duration > 0:
+            params = adaptive_phase_params(best_duration)
+            self.detector.update_end_delay(params["end_delay_s"])
+            _LOGGER.debug(
+                "Seeded adaptive end_delay %.1fs from profile (%.0fs) for %s",
+                params["end_delay_s"],
+                best_duration,
+                self.entry.title,
+            )
 
     async def async_shutdown(self) -> None:
         """Stop listening and persist data."""
@@ -260,7 +285,7 @@ class WattsonCoordinator:
 
         if new_state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
             # Feed 0W so end_delay can fire instead of keeping the cycle
-            # alive on stale power readings from the poll timer.
+            # alive on stale power readings.
             if self.detector.state != CycleState.OFF:
                 self._process_power(0.0)
             return
@@ -289,20 +314,18 @@ class WattsonCoordinator:
         prev_state = self.detector.state
         new_state = self.detector.update(power_w, timestamp)
 
-        # Handle state transitions.
         if prev_state != CycleState.RUNNING and new_state == CycleState.RUNNING:
             self._on_cycle_start(timestamp)
         elif prev_state == CycleState.RUNNING and new_state == CycleState.OFF:
             self._on_cycle_end()
 
-        # Record during active cycle.
         if self._recording and new_state == CycleState.RUNNING:
             self.recorder.record(power_w, timestamp)
-            self._update_time_estimate()
+            if timestamp - self._last_estimate_time >= ESTIMATE_THROTTLE_S:
+                self._update_time_estimate()
+                self._last_estimate_time = timestamp
             self._update_phase(power_w, timestamp)
 
-        # Manage the poll timer: active when detector is not OFF so that
-        # end_delay can fire even if the monitored sensor value stays constant.
         if new_state != CycleState.OFF:
             self._start_poll_timer()
         else:
@@ -355,13 +378,17 @@ class WattsonCoordinator:
         if (
             cycle_data.duration_s < MIN_CYCLE_DURATION_S
             or len(cycle_data.samples) < MIN_SAMPLES
+            or cycle_data.energy_wh < MIN_CYCLE_ENERGY_WH
         ):
-            _LOGGER.debug("Cycle too short, discarding")
+            _LOGGER.debug(
+                "Cycle discarded (dur=%.1fs, energy=%.2fWh)",
+                cycle_data.duration_s,
+                cycle_data.energy_wh,
+            )
             self.match_result = None
             self.time_remaining = None
             return
 
-        # Extract phases using params scaled to the cycle's actual duration.
         params = adaptive_phase_params(cycle_data.duration_s)
         new_phases = extract_phases(
             cycle_data.samples,
@@ -401,20 +428,19 @@ class WattsonCoordinator:
                 profile_name=new_profile.name,
                 correlation=1.0,
                 dtw_distance=None,
+                score=1.0,
             )
 
         self.store.add_cycle(cycle_data)
         self.match_result = result
         self.time_remaining = None
 
-        # Adapt end_delay for the next cycle (unless user set it explicitly).
         if self._user_end_delay is None:
             profile = self.store.get_profile(result.profile_id)
             if profile is not None:
                 p = adaptive_phase_params(profile.avg_duration_s)
                 self.detector.update_end_delay(p["end_delay_s"])
 
-        # Reset phase tracking.
         self.current_phase_index = None
         self.current_phase_name = None
 
@@ -446,7 +472,7 @@ class WattsonCoordinator:
             )
         )
 
-    def _update_phase(self, power_w: float, timestamp: float) -> None:  # noqa: C901
+    def _update_phase(self, power_w: float, timestamp: float) -> None:
         """Track the current phase within a matched profile."""
         if self.match_result is None:
             return
@@ -477,25 +503,38 @@ class WattsonCoordinator:
             self._rolling_powers
         )
 
-        next_idx = idx + 1
-        if next_idx >= len(phases):
-            return
+        best_next_idx = self._best_next_phase_index(phases, idx, rolling_avg)
 
-        dist_current = abs(rolling_avg - phases[idx].avg_power_w)
-        dist_next = abs(rolling_avg - phases[next_idx].avg_power_w)
-
-        if dist_next < dist_current:
-            if self._phase_confirm_index != next_idx:
-                self._phase_confirm_index = next_idx
+        if best_next_idx is not None:
+            if self._phase_confirm_index != best_next_idx:
+                self._phase_confirm_index = best_next_idx
                 self._phase_confirm_since = timestamp
             elif (
                 self._phase_confirm_since is not None
                 and timestamp - self._phase_confirm_since >= params["phase_confirm_s"]
             ):
-                self._transition_phase(next_idx, phases[next_idx], profile)
+                self._transition_phase(best_next_idx, phases[best_next_idx], profile)
         else:
             self._phase_confirm_index = None
             self._phase_confirm_since = None
+
+    def _best_next_phase_index(
+        self,
+        phases: list[ProfilePhase],
+        current_idx: int,
+        rolling_avg: float,
+    ) -> int | None:
+        """Find a later phase that is closer to the rolling average power."""
+        best_next_idx: int | None = None
+        best_next_dist = abs(rolling_avg - phases[current_idx].avg_power_w)
+
+        for candidate_idx in range(current_idx + 1, len(phases)):
+            dist = abs(rolling_avg - phases[candidate_idx].avg_power_w)
+            if dist < best_next_dist:
+                best_next_dist = dist
+                best_next_idx = candidate_idx
+
+        return best_next_idx
 
     def _init_phase(self, idx: int, phase: ProfilePhase, profile: Profile) -> None:
         """Set up the initial phase (index 0) at the start of a matched cycle."""
@@ -554,7 +593,25 @@ class WattsonCoordinator:
             self.entry.title,
         )
 
-    def _update_time_estimate(self) -> None:  # noqa: C901, PLR0912
+    def _set_smoothed_time_remaining(self, remaining: float | None) -> None:
+        """Update time remaining, smoothing large estimate jumps."""
+        if remaining is None:
+            self.time_remaining = None
+            return
+
+        if self.time_remaining is None:
+            self.time_remaining = remaining
+            return
+
+        if abs(remaining - self.time_remaining) > ESTIMATE_SMOOTH_THRESHOLD_S:
+            self.time_remaining = (
+                1 - ESTIMATE_SMOOTH_ALPHA
+            ) * self.time_remaining + ESTIMATE_SMOOTH_ALPHA * remaining
+            return
+
+        self.time_remaining = remaining
+
+    def _update_time_estimate(self) -> None:
         if not self._recording:
             return
 
@@ -563,48 +620,36 @@ class WattsonCoordinator:
             self.time_remaining = None
             return
 
-        partial = self.recorder._samples  # noqa: SLF001
+        partial = self.recorder.samples
         if len(partial) < MIN_SAMPLES:
             return
 
         best_remaining: float | None = None
         best_score = -2.0
+        best_corr = 0.0
         best_profile: Profile | None = None
 
         for profile in profiles:
-            remaining, score, _progress = self.matcher.estimate_remaining(
+            remaining, score, _progress, raw_corr = self.matcher.estimate_remaining(
                 partial,
                 profile,
             )
             if remaining is not None and score > best_score:
                 best_remaining = remaining
                 best_score = score
+                best_corr = raw_corr
                 best_profile = profile
 
-        # Smooth transitions: when the estimate jumps (e.g. profile switch),
-        # blend toward the new value instead of snapping to it.
-        if best_remaining is not None:
-            if self.time_remaining is not None:
-                diff = abs(best_remaining - self.time_remaining)
-                if diff > ESTIMATE_SMOOTH_THRESHOLD_S:
-                    self.time_remaining = (
-                        1 - ESTIMATE_SMOOTH_ALPHA
-                    ) * self.time_remaining + ESTIMATE_SMOOTH_ALPHA * best_remaining
-                else:
-                    self.time_remaining = best_remaining
-            else:
-                self.time_remaining = best_remaining
-        else:
-            self.time_remaining = None
+        self._set_smoothed_time_remaining(best_remaining)
 
         if best_profile is not None and best_remaining is not None:
             self.match_result = MatchResult(
                 profile_id=best_profile.id,
                 profile_name=best_profile.name,
-                correlation=best_score,
+                correlation=best_corr,
                 dtw_distance=None,
+                score=best_score,
             )
-            # Adapt end_delay to the matched profile (unless the user set it).
             if self._user_end_delay is None:
                 params = adaptive_phase_params(best_profile.avg_duration_s)
                 self.detector.update_end_delay(params["end_delay_s"])
@@ -612,4 +657,5 @@ class WattsonCoordinator:
     @callback
     def _update_entities(self) -> None:
         for entity in self._entities:
-            entity.async_write_ha_state()
+            if entity.entity_category is None:
+                entity.async_write_ha_state()

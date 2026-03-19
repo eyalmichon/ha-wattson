@@ -154,24 +154,31 @@ async def test_simulated_cycle_lifecycle(hass: HomeAssistant) -> None:
         # Phase 1: power up -> STARTING
         t += 1.0
         mock_time.time.return_value = t
-        hass.states.async_set("sensor.washer_power", "50.0")
+        hass.states.async_set("sensor.washer_power", "500.0")
         await hass.async_block_till_done()
         assert coordinator.detector.state.value == "starting"
 
         # Phase 2: sustain -> RUNNING
-        t += 15.0
+        t += 10.0
         mock_time.time.return_value = t
-        hass.states.async_set("sensor.washer_power", "50.0", force_update=True)
+        hass.states.async_set("sensor.washer_power", "500.0", force_update=True)
         await hass.async_block_till_done()
         assert coordinator.detector.state.value == "running"
 
-        # Phase 3: power drops below off threshold for end_delay -> OFF
+        # Phase 3: keep running at 500W for 60s so recorder accumulates
+        # enough energy (500W * 60s / 3600 = 8.3 Wh > MIN_CYCLE_ENERGY_WH).
+        t += 60.0
+        mock_time.time.return_value = t
+        hass.states.async_set("sensor.washer_power", "500.0", force_update=True)
+        await hass.async_block_till_done()
+
+        # Phase 4: power drops below off threshold -> end_delay -> OFF
         t += 1.0
         mock_time.time.return_value = t
         hass.states.async_set("sensor.washer_power", "0.5")
         await hass.async_block_till_done()
 
-        t += 200.0
+        t += 35.0
         mock_time.time.return_value = t
         hass.states.async_set("sensor.washer_power", "0.5", force_update=True)
         await hass.async_block_till_done()
@@ -181,6 +188,59 @@ async def test_simulated_cycle_lifecycle(hass: HomeAssistant) -> None:
     assert len(coordinator.store.cycles) == 1
     # Verify a profile was created (no existing profiles -> new one).
     assert len(coordinator.store.profiles) == 1
+
+
+async def test_short_low_energy_cycle_discarded(hass: HomeAssistant) -> None:
+    """Cycles below MIN_CYCLE_ENERGY_WH are discarded, not stored as profiles."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Test Washer",
+        data=MOCK_ENTRY_DATA,
+        unique_id="sensor.washer_power_ghost",
+    )
+    entry.add_to_hass(hass)
+
+    t = 1000000.0
+
+    with patch("custom_components.wattson.coordinator.time") as mock_time:
+        mock_time.time.return_value = t
+
+        hass.states.async_set("sensor.washer_power", "0.0")
+        await async_setup_component(hass, "persistent_notification", {})
+        assert await async_setup_component(hass, DOMAIN, {})
+        await hass.async_block_till_done()
+
+        coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+
+        # Run a very short low-energy "cycle" (anti-wrinkle tumble):
+        # 50W for 15s = 50*15/3600 = 0.21 Wh — above start gate but below 5 Wh.
+        t += 1.0
+        mock_time.time.return_value = t
+        hass.states.async_set("sensor.washer_power", "50.0")
+        await hass.async_block_till_done()
+
+        t += 15.0
+        mock_time.time.return_value = t
+        hass.states.async_set("sensor.washer_power", "50.0", force_update=True)
+        await hass.async_block_till_done()
+        assert coordinator.detector.state.value == "running"
+
+        # Power drops → end_delay → OFF
+        t += 1.0
+        mock_time.time.return_value = t
+        hass.states.async_set("sensor.washer_power", "0.0")
+        await hass.async_block_till_done()
+
+        t += 35.0
+        mock_time.time.return_value = t
+        hass.states.async_set("sensor.washer_power", "0.0", force_update=True)
+        await hass.async_block_till_done()
+        assert coordinator.detector.state.value == "off"
+
+    assert len(coordinator.store.profiles) == 0, (
+        "Low-energy ghost cycle should not create a profile"
+    )
+    assert len(coordinator.store.cycles) == 0
 
 
 async def test_unavailable_entity_ignored(

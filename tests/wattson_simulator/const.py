@@ -424,4 +424,16 @@ PROGRAMS: dict[str, Program] = {
             ),
         ),
     ),
+    # ── Replay: Dryer with anti-wrinkle tail — focused test ──────
+    "dryer_antiwrinkle": Program(
+        name="Dryer Anti-Wrinkle",
+        phases=(
+            Phase(
+                duration_s=600,
+                power_w=0,
+                phase_type=PhaseType.REPLAY,
+                replay_data=load_fixture("dryer_antiwrinkle.json"),
+            ),
+        ),
+    ),
 }

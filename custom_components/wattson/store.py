@@ -27,6 +27,11 @@ class WattsonStore:
         )
         self._cycles: list[CycleData] = []
         self._profiles: list[Profile] = []
+        self._profiles_by_id: dict[str, Profile] = {}
+
+    def _sync_profile_index(self) -> None:
+        """Rebuild the profile lookup index from the profile list."""
+        self._profiles_by_id = {profile.id: profile for profile in self._profiles}
 
     async def async_load(self) -> None:
         """Load data from disk."""
@@ -36,6 +41,7 @@ class WattsonStore:
 
         self._cycles = [CycleData(**c) for c in data.get("cycles", [])]
         self._profiles = [Profile.from_dict(p) for p in data.get("profiles", [])]
+        self._sync_profile_index()
 
     async def async_save(self) -> None:
         """Persist data to disk."""
@@ -64,18 +70,21 @@ class WattsonStore:
     def add_profile(self, profile: Profile) -> None:
         """Add a new profile."""
         self._profiles.append(profile)
+        self._profiles_by_id[profile.id] = profile
 
     def update_profile(self, profile: Profile) -> None:
         """Replace an existing profile by id."""
-        self._profiles = [profile if p.id == profile.id else p for p in self._profiles]
+        for idx, existing in enumerate(self._profiles):
+            if existing.id == profile.id:
+                self._profiles[idx] = profile
+                self._profiles_by_id[profile.id] = profile
+                return
 
     def delete_profile(self, profile_id: str) -> None:
         """Remove a profile by id."""
         self._profiles = [p for p in self._profiles if p.id != profile_id]
+        self._profiles_by_id.pop(profile_id, None)
 
     def get_profile(self, profile_id: str) -> Profile | None:
         """Get a profile by id."""
-        for p in self._profiles:
-            if p.id == profile_id:
-                return p
-        return None
+        return self._profiles_by_id.get(profile_id)

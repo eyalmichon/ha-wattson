@@ -53,6 +53,7 @@ ESTIMATE_MIN_PARTIAL_FRAC: float = 0.1
 ESTIMATE_SMOOTH_THRESHOLD_S: float = 15.0
 ESTIMATE_SMOOTH_ALPHA: float = 0.3
 ESTIMATE_SHAPE_WEIGHT: float = 0.5
+ESTIMATE_THROTTLE_S: float = 5.0
 MAX_STORED_CYCLES: int = 50
 RESAMPLE_POINTS: int = 100
 
@@ -62,7 +63,8 @@ DOWNSAMPLE_POWER_DELTA: float = 1.0
 DOWNSAMPLE_TIME_DELTA: float = 60.0
 
 MIN_SAMPLES: int = 2
-MIN_CYCLE_DURATION_S: float = 1.0
+MIN_CYCLE_DURATION_S: float = 30.0
+MIN_CYCLE_ENERGY_WH: float = 5.0
 STD_EPSILON: float = 1e-9
 
 # --- Phase extraction (static defaults, used as fallbacks) ---
@@ -73,6 +75,8 @@ PHASE_INTERMITTENT_COV: float = 0.5
 PHASE_PRE_SMOOTH_WINDOW_S: int = 15
 PHASE_MIN_SMOOTH_WIN: int = 2
 PHASE_FLAT_TOLERANCE: float = 1e-6
+PHASE_MAX_GRID_POINTS: int = 3600
+PHASE_COV_MIN_POWER_W: float = 1.0
 
 # --- Phase tracking (static defaults, used as fallbacks) ---
 

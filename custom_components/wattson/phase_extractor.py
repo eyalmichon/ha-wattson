@@ -13,8 +13,10 @@ import numpy as np
 
 from .const import (
     MIN_SAMPLES,
+    PHASE_COV_MIN_POWER_W,
     PHASE_FLAT_TOLERANCE,
     PHASE_INTERMITTENT_COV,
+    PHASE_MAX_GRID_POINTS,
     PHASE_MIN_DURATION_S,
     PHASE_MIN_SMOOTH_WIN,
     PHASE_PENALTY_FACTOR,
@@ -56,8 +58,7 @@ def extract_phases(
     if total_duration <= 0:
         return []
 
-    # Resample to a uniform 1-second grid.
-    n_seconds = max(int(total_duration), MIN_SAMPLES)
+    n_seconds = min(max(int(total_duration), MIN_SAMPLES), PHASE_MAX_GRID_POINTS)
     uniform_t = np.linspace(times[0], times[-1], n_seconds)
     uniform_p = np.interp(uniform_t, times, powers)
 
@@ -103,7 +104,7 @@ def extract_phases(
 
         avg_power = float(np.mean(segment))
         std_power = float(np.std(segment))
-        cov = std_power / avg_power if avg_power > 0 else 0.0
+        cov = std_power / avg_power if avg_power > PHASE_COV_MIN_POWER_W else 0.0
         pattern = "intermittent" if cov > intermittent_cov else "constant"
 
         phases.append(
@@ -116,7 +117,7 @@ def extract_phases(
             )
         )
 
-    return phases or []
+    return phases
 
 
 def _binseg_recursive(

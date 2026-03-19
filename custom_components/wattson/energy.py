@@ -10,8 +10,9 @@ def samples_to_arrays(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Split (time, power) samples into separate times and powers arrays."""
     if not samples:
-        return np.array([]), np.array([])
-    return np.array([s[0] for s in samples]), np.array([s[1] for s in samples])
+        return np.array([], dtype=float), np.array([], dtype=float)
+    arr = np.asarray(samples, dtype=float)
+    return arr[:, 0], arr[:, 1]
 
 
 def trapezoidal_energy_wh(

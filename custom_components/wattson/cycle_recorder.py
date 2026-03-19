@@ -66,17 +66,14 @@ class CycleRecorder:
         """Record a power reading, applying delta-based downsampling."""
         self._accumulate_energy(power_w, timestamp)
 
-        should_store = False
-
-        if (
+        should_store = (
             self._last_stored_power is None
             or abs(power_w - self._last_stored_power) >= self._power_delta
             or (
                 self._last_stored_time is not None
                 and (timestamp - self._last_stored_time) >= self._time_delta
             )
-        ):
-            should_store = True
+        )
 
         if should_store:
             self._samples.append((timestamp - self._start_time, power_w))
@@ -86,8 +83,18 @@ class CycleRecorder:
         self._last_power = power_w
         self._last_time = timestamp
 
+    @property
+    def samples(self) -> list[tuple[float, float]]:
+        """Current recorded samples (read-only snapshot)."""
+        return list(self._samples)
+
     def finish(self, end_time: float) -> CycleData:
         """Finish recording and return the completed cycle data."""
+        if self._last_power is not None and self._last_time is not None:
+            rel_time = self._last_time - self._start_time
+            if not self._samples or self._samples[-1] != (rel_time, self._last_power):
+                self._samples.append((rel_time, self._last_power))
+
         return CycleData(
             start_time=self._start_time,
             end_time=end_time,
